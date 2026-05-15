@@ -1941,7 +1941,7 @@ This class owns the per-peripheral state machine: pending semaphores for connect
 
 ```swift
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import os
 
 final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Sendable {
@@ -2041,7 +2041,7 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
 
 ```swift
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import os
 
 final class CBMSubscriptionRegistry: @unchecked Sendable {
@@ -3165,7 +3165,7 @@ Expected: tests omit until CoreS3 ships NUS characteristics; the compile path is
 
 ```swift
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import os
 
 final class CBMSubscriptionRegistry: @unchecked Sendable {

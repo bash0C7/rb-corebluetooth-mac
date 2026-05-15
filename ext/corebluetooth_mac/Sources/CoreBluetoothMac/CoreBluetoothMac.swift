@@ -69,3 +69,51 @@ public func cbm_central_scan(
     let results = c.scan(name: nameStr, services: services, timeoutMs: timeout_ms)
     return strdup(c.scanResultsAsJSON(results))
 }
+
+@c
+public func cbm_central_connect(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ timeout_ms: Int32,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let id = String(cString: identifier)
+    if let err = c.connect(identifier: id, timeoutMs: timeout_ms) {
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return 0
+    }
+    return 1
+}
+
+@c
+public func cbm_central_disconnect(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let id = String(cString: identifier)
+    if let err = c.disconnect(identifier: id) {
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return 0
+    }
+    return 1
+}
+
+@c
+public func cbm_peripheral_state(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    return strdup(c.peripheralState(identifier: String(cString: identifier)))
+}

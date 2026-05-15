@@ -106,4 +106,85 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         let r = ScanResult(identifier: peripheral.identifier.uuidString, name: name, rssi: RSSI.intValue)
         scanLock.withLock { $0[peripheral.identifier.uuidString] = r }
     }
+
+    private let delegatesLock = OSAllocatedUnfairLock<[UUID: CBMPeripheralDelegate]>(initialState: [:])
+
+    func delegate(for identifier: UUID) -> CBMPeripheralDelegate? {
+        return delegatesLock.withLock { $0[identifier] }
+    }
+
+    func peripheral(identifier: String) -> (CBPeripheral, CBMPeripheralDelegate)? {
+        guard let uuid = UUID(uuidString: identifier) else { return nil }
+        let p: CBPeripheral? = knownPeripherals.withLock { $0[uuid] }
+        guard let peripheral = p else { return nil }
+        let d = delegatesLock.withLock { dict -> CBMPeripheralDelegate in
+            if let existing = dict[uuid] { return existing }
+            let nd = CBMPeripheralDelegate(peripheral: peripheral)
+            dict[uuid] = nd
+            return nd
+        }
+        return (peripheral, d)
+    }
+
+    func connect(identifier: String, timeoutMs: Int32) -> CBMError? {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .connection("Unknown peripheral identifier \(identifier); scan first.")
+        }
+        d.connectError = nil
+        d.connected = false
+        manager.connect(p, options: nil)
+        let r = d.connectSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        if r == .timedOut { manager.cancelPeripheralConnection(p); return .timeout("connect timed out after \(timeoutMs)ms") }
+        if let e = d.connectError { return .connection(e.localizedDescription) }
+        if !d.connected { return .connection("connect signalled but state is not connected") }
+        return nil
+    }
+
+    func disconnect(identifier: String) -> CBMError? {
+        guard let (p, _) = peripheral(identifier: identifier) else {
+            return .closed("Unknown peripheral identifier \(identifier).")
+        }
+        manager.cancelPeripheralConnection(p)
+        return nil
+    }
+
+    func peripheralState(identifier: String) -> String {
+        guard let (p, _) = peripheral(identifier: identifier) else { return "unknown" }
+        switch p.state {
+        case .disconnected:  return "disconnected"
+        case .connecting:    return "connecting"
+        case .connected:     return "connected"
+        case .disconnecting: return "disconnecting"
+        @unknown default:    return "unknown"
+        }
+    }
+
+    // MARK: CBCentralManagerDelegate – connect lifecycle
+
+    func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        if let d = delegate(for: p.identifier) {
+            d.connected = true
+            d.connectError = nil
+            d.connectSem.signal()
+        }
+    }
+
+    func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
+        if let d = delegate(for: p.identifier) {
+            d.connected = false
+            d.connectError = error ?? NSError(domain: "CBM", code: -1)
+            d.connectSem.signal()
+        }
+    }
+
+    func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        if let d = delegate(for: p.identifier) {
+            d.connected = false
+            // If a connect was pending, surface the error.
+            if d.connectError == nil && error != nil {
+                d.connectError = error
+                d.connectSem.signal()
+            }
+        }
+    }
 }

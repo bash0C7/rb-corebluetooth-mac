@@ -115,6 +115,45 @@ static VALUE rb_cbm_hello(VALUE self) {
     return s;
 }
 
+struct connect_args {
+    void *p; const char *id; int32_t timeout_ms;
+    int32_t tag; char *err; int32_t ok;
+};
+
+static void *connect_no_gvl(void *data) {
+    struct connect_args *a = (struct connect_args *)data;
+    a->ok = cbm_central_connect(a->p, a->id, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_central_connect(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct connect_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0 };
+    rb_thread_call_without_gvl(connect_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.ok) raise_with(a.tag, a.err);
+    return Qtrue;
+}
+
+static VALUE rb_central_disconnect(VALUE self, VALUE id_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    int32_t tag = 0; char *err = NULL;
+    int32_t ok = cbm_central_disconnect(p, StringValueCStr(id_v), &tag, &err);
+    if (!ok) raise_with(tag, err);
+    return Qtrue;
+}
+
+static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    char *r = cbm_peripheral_state(p, StringValueCStr(id_v));
+    VALUE s = rb_utf8_str_new_cstr(r ? r : "unknown");
+    if (r) free(r);
+    return ID2SYM(rb_intern(StringValueCStr(s)));
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -135,4 +174,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "initialize", rb_central_init, 1);
     rb_define_method(cNative, "central_id", rb_central_id,   0);
     rb_define_method(cNative, "scan",       rb_central_scan, 3);
+    rb_define_method(cNative, "connect",          rb_central_connect,    2);
+    rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
+    rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
 }

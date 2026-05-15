@@ -26,5 +26,29 @@ module CoreBluetoothMac
         )
       end
     end
+
+    def connect(device, timeout: 5.0)
+      @native.connect(device.identifier, (timeout * 1000).to_i)
+      Peripheral.new(central: self, identifier: device.identifier)
+    end
+
+    def disconnect(peripheral)
+      @native.disconnect(peripheral.identifier)
+      nil
+    end
+
+    def close
+      # Future task: explicit invalidation; relying on GC for now.
+      nil
+    end
+
+    def __call_native(op, *args)
+      case op
+      when :peripheral_state
+        @native.peripheral_state(*args)
+      else
+        raise ArgumentError, "unknown native op: #{op}"
+      end
+    end
   end
 end
