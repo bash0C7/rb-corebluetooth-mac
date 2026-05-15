@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "CoreBluetoothMac",
-    platforms: [.macOS("11.0")],
+    platforms: [.macOS("13.0")],
     products: [
         .library(name: "CoreBluetoothMac", type: .dynamic, targets: ["CoreBluetoothMac"])
     ],

@@ -12,7 +12,7 @@ Gem::Specification.new do |spec|
   spec.description = "rb-corebluetooth-mac drives Apple's CoreBluetooth framework " \
     "from Ruby via a Swift native extension, exposing scan / connect / discover / " \
     "read / write / notify so a macOS host can act as a BLE central. Requires " \
-    "macOS 11+."
+    "macOS 13+."
   spec.homepage = "https://github.com/bash0C7/rb-corebluetooth-mac"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
