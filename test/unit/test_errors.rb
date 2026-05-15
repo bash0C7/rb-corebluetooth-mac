@@ -35,3 +35,15 @@ class ErrorsTest < Test::Unit::TestCase
     assert_operator CoreBluetoothMac::ClosedError, :<, CoreBluetoothMac::Error
   end
 end
+
+class CentralErrorBridgeTest < Test::Unit::TestCase
+  # Verify the constants the C bridge looks up exist with the expected names.
+  # The hardware behaviour itself is exercised in integration tests.
+  CoreBluetoothMac.constants(false).each do |c|
+    klass = CoreBluetoothMac.const_get(c)
+    next unless klass.is_a?(Class) && klass < StandardError
+    define_method("test_#{c}_is_raisable") do
+      assert_raise(klass) { raise klass, "boom" }
+    end
+  end
+end

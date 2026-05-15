@@ -5,6 +5,28 @@
 
 static VALUE eCbm, eState, ePerm, eTimeout, eConn, eDisco, eIO, eClosed;
 
+// ---- error mapping ----
+
+static VALUE error_class_for_tag(int32_t tag) {
+    switch (tag) {
+        case 1: return eState;
+        case 2: return ePerm;
+        case 3: return eTimeout;
+        case 4: return eConn;
+        case 5: return eDisco;
+        case 6: return eIO;
+        case 7: return eClosed;
+        default: return eCbm;
+    }
+}
+
+static void raise_with(int32_t tag, char *msg) {
+    VALUE klass = error_class_for_tag(tag);
+    VALUE m = rb_utf8_str_new_cstr(msg ? msg : "unknown error");
+    if (msg) free(msg);
+    rb_raise(klass, "%s", StringValueCStr(m));
+}
+
 // ---- TypedData for Central ----
 
 static void central_dfree(void *p) {
@@ -21,7 +43,32 @@ static VALUE rb_central_alloc(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &central_dt, NULL);
 }
 
-// ---- helpers ----
+// ---- initialize (state-blocking, releases GVL) ----
+
+struct new_args { int32_t timeout_ms; int32_t tag; char *err; void *p; };
+
+static void *new_no_gvl(void *data) {
+    struct new_args *a = (struct new_args *)data;
+    a->p = cbm_central_new(a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_central_init(VALUE self, VALUE timeout_ms_v) {
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct new_args a = { (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
+    rb_thread_call_without_gvl(new_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.p) raise_with(a.tag, a.err);
+    DATA_PTR(self) = a.p;
+    return self;
+}
+
+static VALUE rb_central_id(VALUE self) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    return LL2NUM(cbm_central_id(p));
+}
+
+// ---- hello (still useful for smoke) ----
 
 static VALUE rb_cbm_hello(VALUE self) {
     char *r = cbm_hello();
@@ -48,4 +95,6 @@ void Init_corebluetooth_mac(void) {
 
     VALUE cNative = rb_define_class_under(mod, "Native", rb_cObject);
     rb_define_alloc_func(cNative, rb_central_alloc);
+    rb_define_method(cNative, "initialize", rb_central_init, 1);
+    rb_define_method(cNative, "central_id", rb_central_id,   0);
 }

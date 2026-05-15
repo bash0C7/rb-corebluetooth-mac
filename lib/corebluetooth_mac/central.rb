@@ -2,9 +2,12 @@
 
 module CoreBluetoothMac
   class Central
-    # Phase 1 lands real init in Task 12; for now this is unimplemented.
     def initialize(state_timeout: 3.0)
-      raise NotImplementedError, "Central.new arrives in Task 12"
+      @native = Native.new((state_timeout * 1000).to_i)
+    end
+
+    def central_id
+      @native.central_id
     end
   end
 end
