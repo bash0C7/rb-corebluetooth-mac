@@ -1849,7 +1849,11 @@ module CoreBluetoothMac
     end
 
     def scan(name: nil, services: nil, timeout: 5.0)
-      services_json = services && JSON.dump(Array(services))
+      # Empty `services: []` would serialize as "[]" and CoreBluetooth treats
+      # an empty service-filter array as "match nothing", silently returning
+      # zero peripherals. Normalize empty/nil to nil so Swift skips the filter.
+      arr = services ? Array(services) : []
+      services_json = arr.empty? ? nil : JSON.dump(arr)
       raw = @native.scan(name, services_json, (timeout * 1000).to_i)
       JSON.parse(raw).map do |h|
         DiscoveredDevice.new(
@@ -2260,7 +2264,11 @@ module CoreBluetoothMac
     end
 
     def scan(name: nil, services: nil, timeout: 5.0)
-      services_json = services && JSON.dump(Array(services))
+      # Empty `services: []` would serialize as "[]" and CoreBluetooth treats
+      # an empty service-filter array as "match nothing", silently returning
+      # zero peripherals. Normalize empty/nil to nil so Swift skips the filter.
+      arr = services ? Array(services) : []
+      services_json = arr.empty? ? nil : JSON.dump(arr)
       raw = @native.scan(name, services_json, (timeout * 1000).to_i)
       JSON.parse(raw).map do |h|
         DiscoveredDevice.new(
