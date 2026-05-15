@@ -43,3 +43,29 @@ public func cbm_central_id(_ ptr: UnsafeMutableRawPointer) -> Int64 {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
     return c.centralId
 }
+
+@c
+public func cbm_central_scan(
+    _ ptr: UnsafeMutableRawPointer,
+    _ name_filter: UnsafePointer<CChar>?,
+    _ service_uuids_json: UnsafePointer<CChar>?,
+    _ timeout_ms: Int32,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<CChar>? {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let nameStr: String? = name_filter.map { String(cString: $0) }
+    var services: [CBUUID]? = nil
+    if let json = service_uuids_json {
+        let s = String(cString: json)
+        if let data = s.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            services = arr.map { CBUUID(string: $0) }
+        }
+    }
+    let results = c.scan(name: nameStr, services: services, timeoutMs: timeout_ms)
+    return strdup(c.scanResultsAsJSON(results))
+}

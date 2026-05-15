@@ -68,6 +68,43 @@ static VALUE rb_central_id(VALUE self) {
     return LL2NUM(cbm_central_id(p));
 }
 
+// ---- scan (releases GVL while delegate fills results) ----
+
+struct scan_args {
+    void *p;
+    const char *name;
+    const char *services_json;
+    int32_t timeout_ms;
+    int32_t tag;
+    char *err;
+    char *result;
+};
+
+static void *scan_no_gvl(void *data) {
+    struct scan_args *a = (struct scan_args *)data;
+    a->result = cbm_central_scan(a->p, a->name, a->services_json, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_central_scan(VALUE self, VALUE name_v, VALUE services_json_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct scan_args a = {
+        p,
+        NIL_P(name_v) ? NULL : StringValueCStr(name_v),
+        NIL_P(services_json_v) ? NULL : StringValueCStr(services_json_v),
+        (int32_t)NUM2INT(timeout_ms_v),
+        0, NULL, NULL
+    };
+    rb_thread_call_without_gvl(scan_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (a.err) raise_with(a.tag, a.err);
+    if (!a.result) return rb_utf8_str_new_cstr("[]");
+    VALUE s = rb_utf8_str_new_cstr(a.result);
+    free(a.result);
+    return s;
+}
+
 // ---- hello (still useful for smoke) ----
 
 static VALUE rb_cbm_hello(VALUE self) {
@@ -97,4 +134,5 @@ void Init_corebluetooth_mac(void) {
     rb_define_alloc_func(cNative, rb_central_alloc);
     rb_define_method(cNative, "initialize", rb_central_init, 1);
     rb_define_method(cNative, "central_id", rb_central_id,   0);
+    rb_define_method(cNative, "scan",       rb_central_scan, 3);
 }
