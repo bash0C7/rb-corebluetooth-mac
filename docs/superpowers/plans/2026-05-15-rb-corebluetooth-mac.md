@@ -1696,14 +1696,16 @@ struct ScanResult {
     let rssi: Int
 }
 
+// All mutable state lives inside its lock to satisfy Swift 6 strict-concurrency
+// (same pattern as `idCounter` in Task 11). A `var` + side-lock would emit
+// "stored property of Sendable type" errors on a `@unchecked Sendable` class.
 private let scanLock = OSAllocatedUnfairLock<[String: ScanResult]>(initialState: [:])
-private var nameFilter: String? = nil
-private(set) var knownPeripherals: [UUID: CBPeripheral] = [:]
-private let knownLock = OSAllocatedUnfairLock(initialState: ())
+private let nameFilter = OSAllocatedUnfairLock<String?>(initialState: nil)
+private let knownPeripherals = OSAllocatedUnfairLock<[UUID: CBPeripheral]>(initialState: [:])
 
 func scan(name: String?, services: [CBUUID]?, timeoutMs: Int32) -> [ScanResult] {
     scanLock.withLock { $0.removeAll() }
-    nameFilter = name
+    nameFilter.withLock { $0 = name }
     let options: [String: Any] = [CBCentralManagerScanOptionAllowDuplicatesKey: true]
     manager.scanForPeripherals(withServices: services, options: options)
     queue.asyncAfter(deadline: .now() + .milliseconds(Int(timeoutMs))) { [weak self] in
@@ -1721,11 +1723,12 @@ func centralManager(_ central: CBCentralManager,
                     advertisementData: [String: Any],
                     rssi RSSI: NSNumber) {
     let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
-    if let filter = nameFilter, name != filter { return }
+    let filter = nameFilter.withLock { $0 }
+    if let filter = filter, name != filter { return }
 
-    knownLock.withLock { _ in
-        if knownPeripherals[peripheral.identifier] == nil {
-            knownPeripherals[peripheral.identifier] = peripheral
+    knownPeripherals.withLock { state in
+        if state[peripheral.identifier] == nil {
+            state[peripheral.identifier] = peripheral
         }
     }
     let r = ScanResult(identifier: peripheral.identifier.uuidString, name: name, rssi: RSSI.intValue)
@@ -2060,8 +2063,7 @@ func delegate(for identifier: UUID) -> CBMPeripheralDelegate? {
 
 func peripheral(identifier: String) -> (CBPeripheral, CBMPeripheralDelegate)? {
     guard let uuid = UUID(uuidString: identifier) else { return nil }
-    var p: CBPeripheral?
-    knownLock.withLock { _ in p = knownPeripherals[uuid] }
+    let p: CBPeripheral? = knownPeripherals.withLock { $0[uuid] }
     guard let peripheral = p else { return nil }
     let d = delegatesLock.withLock { dict -> CBMPeripheralDelegate in
         if let existing = dict[uuid] { return existing }
