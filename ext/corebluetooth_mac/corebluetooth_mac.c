@@ -232,6 +232,39 @@ static VALUE rb_characteristic_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE c
     return s;
 }
 
+struct write_args {
+    void *p; const char *id; const char *svc; const char *ch;
+    const unsigned char *buf; int32_t buf_len;
+    int32_t with_response; int32_t timeout_ms;
+    int32_t tag; char *err; int32_t ok;
+};
+
+static void *write_no_gvl(void *data) {
+    struct write_args *a = (struct write_args *)data;
+    a->ok = cbm_characteristic_write(a->p, a->id, a->svc, a->ch,
+                                     a->buf, a->buf_len, a->with_response, a->timeout_ms,
+                                     &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v,
+                                     VALUE data_v, VALUE with_response_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    StringValue(data_v);
+    Check_Type(with_response_v, T_FIXNUM);
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct write_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        (const unsigned char *)RSTRING_PTR(data_v), (int32_t)RSTRING_LEN(data_v),
+        (int32_t)NUM2INT(with_response_v), (int32_t)NUM2INT(timeout_ms_v),
+        0, NULL, 0
+    };
+    rb_thread_call_without_gvl(write_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.ok) raise_with(a.tag, a.err);
+    return Qnil;
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -258,4 +291,5 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       2);
     rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
     rb_define_method(cNative, "characteristic_read",      rb_characteristic_read,                4);
+    rb_define_method(cNative, "characteristic_write",     rb_characteristic_write,               6);
 }

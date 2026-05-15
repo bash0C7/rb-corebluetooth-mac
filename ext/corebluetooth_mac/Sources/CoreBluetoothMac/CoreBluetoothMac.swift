@@ -179,6 +179,39 @@ public func cbm_characteristic_read(
 }
 
 @c
+public func cbm_characteristic_write(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ char_uuid: UnsafePointer<CChar>,
+    _ data: UnsafePointer<UInt8>,
+    _ data_len: Int32,
+    _ with_response: Int32,
+    _ timeout_ms: Int32,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let bytes = UnsafeBufferPointer(start: data, count: Int(data_len))
+    let payload = Data(buffer: bytes)
+    if let err = c.writeCharacteristic(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        charUUID: String(cString: char_uuid),
+        data: payload,
+        withResponse: with_response != 0,
+        timeoutMs: timeout_ms
+    ) {
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return 0
+    }
+    return 1
+}
+
+@c
 public func cbm_service_discover_characteristics(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,

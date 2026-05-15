@@ -229,6 +229,32 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return .success(d.readValue ?? Data())
     }
 
+    func writeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
+                              data: Data, withResponse: Bool, timeoutMs: Int32) -> CBMError? {
+        guard let (p, d) = peripheral(identifier: identifier) else { return .closed("Unknown peripheral \(identifier)") }
+        guard p.state == .connected else { return .connection("Peripheral not connected") }
+        let svcId = CBUUID(string: serviceUUID)
+        let chId  = CBUUID(string: charUUID)
+        guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
+              let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
+            return .discovery("Service/characteristic not discovered")
+        }
+        if withResponse {
+            d.writeCharUUID = chId
+            d.writeError = nil
+            p.writeValue(data, for: ch, type: .withResponse)
+            let r = d.writeSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+            d.writeCharUUID = nil
+            if r == .timedOut { return .timeout("write timed out after \(timeoutMs)ms") }
+            if let e = d.writeError { return .io(e.localizedDescription) }
+            return nil
+        } else {
+            // Best-effort. Optionally honor canSendWriteWithoutResponse.
+            p.writeValue(data, for: ch, type: .withoutResponse)
+            return nil
+        }
+    }
+
     // MARK: CBCentralManagerDelegate – connect lifecycle
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
