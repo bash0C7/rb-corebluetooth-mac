@@ -35,8 +35,9 @@ class PeripheralRoutingTest < Test::Unit::TestCase
     assert_equal "00001800-0000-1000-8000-00805f9b34fb", @peripheral.services.last.uuid
   end
 
-  def test_services_raises_ClosedError_before_discover
-    assert_raise(CoreBluetoothMac::ClosedError) { @peripheral.services }
+  def test_services_raises_closed_error_before_discover
+    err = assert_raise(CoreBluetoothMac::Error) { @peripheral.services }
+    assert_equal :closed, err.domain
   end
 
   def test_find_service_case_insensitive
@@ -85,11 +86,13 @@ class ServiceRoutingTest < Test::Unit::TestCase
   end
 
   def test_characteristics_raises_before_discover
-    assert_raise(CoreBluetoothMac::ClosedError) { @service.characteristics }
+    err = assert_raise(CoreBluetoothMac::Error) { @service.characteristics }
+    assert_equal :closed, err.domain
   end
 
   def test_find_characteristic_raises_before_discover
-    assert_raise(CoreBluetoothMac::ClosedError) { @service.find_characteristic("anything") }
+    err = assert_raise(CoreBluetoothMac::Error) { @service.find_characteristic("anything") }
+    assert_equal :closed, err.domain
   end
 end
 

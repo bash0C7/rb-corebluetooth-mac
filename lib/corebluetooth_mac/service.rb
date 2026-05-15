@@ -26,7 +26,7 @@ module CoreBluetoothMac
     end
 
     def characteristics
-      @characteristics || raise(ClosedError, "call discover_characteristics first")
+      @characteristics || raise(Error.new("call discover_characteristics first", domain: :closed))
     end
 
     def characteristics_loaded?

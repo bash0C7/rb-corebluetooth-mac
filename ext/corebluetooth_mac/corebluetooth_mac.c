@@ -3,28 +3,17 @@
 #include <stdlib.h>
 #include "CoreBluetoothMac-Swift.h"
 
-static VALUE eCbm, eState, ePerm, eTimeout, eConn, eDisco, eIO, eClosed;
+static VALUE eErrorClass;
 
-// ---- error mapping ----
+// ---- error raise ----
 
-static VALUE error_class_for_tag(int32_t tag) {
-    switch (tag) {
-        case 1: return eState;
-        case 2: return ePerm;
-        case 3: return eTimeout;
-        case 4: return eConn;
-        case 5: return eDisco;
-        case 6: return eIO;
-        case 7: return eClosed;
-        default: return eCbm;
-    }
-}
-
-static void raise_with(int32_t tag, char *msg) {
-    VALUE klass = error_class_for_tag(tag);
+// NOTE: Tag-based domain dispatch was removed here — domain info will be
+// re-introduced via the JSON envelope in Plan Task 3. For Task 1 the C bridge
+// raises the single merged Error class with message only.
+static void raise_with(char *msg) {
     VALUE m = rb_utf8_str_new_cstr(msg ? msg : "unknown error");
     if (msg) free(msg);
-    rb_raise(klass, "%s", StringValueCStr(m));
+    rb_raise(eErrorClass, "%s", StringValueCStr(m));
 }
 
 // ---- TypedData for Central ----
@@ -57,14 +46,14 @@ static VALUE rb_central_init(VALUE self, VALUE timeout_ms_v) {
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct new_args a = { (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
     rb_thread_call_without_gvl(new_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.p) raise_with(a.tag, a.err);
+    if (!a.p) raise_with(a.err);
     DATA_PTR(self) = a.p;
     return self;
 }
 
 static VALUE rb_central_id(VALUE self) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     return LL2NUM(cbm_central_id(p));
 }
 
@@ -88,7 +77,7 @@ static void *scan_no_gvl(void *data) {
 
 static VALUE rb_central_scan(VALUE self, VALUE name_v, VALUE services_json_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct scan_args a = {
         p,
@@ -98,7 +87,7 @@ static VALUE rb_central_scan(VALUE self, VALUE name_v, VALUE services_json_v, VA
         0, NULL, NULL
     };
     rb_thread_call_without_gvl(scan_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.tag, a.err);
+    if (a.err) raise_with(a.err);
     if (!a.result) return rb_utf8_str_new_cstr("[]");
     VALUE s = rb_utf8_str_new_cstr(a.result);
     free(a.result);
@@ -128,26 +117,27 @@ static void *connect_no_gvl(void *data) {
 
 static VALUE rb_central_connect(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct connect_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0 };
     rb_thread_call_without_gvl(connect_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.tag, a.err);
+    if (!a.ok) raise_with(a.err);
     return Qtrue;
 }
 
 static VALUE rb_central_disconnect(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     int32_t tag = 0; char *err = NULL;
     int32_t ok = cbm_central_disconnect(p, StringValueCStr(id_v), &tag, &err);
-    if (!ok) raise_with(tag, err);
+    (void)tag;
+    if (!ok) raise_with(err);
     return Qtrue;
 }
 
 static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     char *r = cbm_peripheral_state(p, StringValueCStr(id_v));
     VALUE s = rb_utf8_str_new_cstr(r ? r : "unknown");
     if (r) free(r);
@@ -167,11 +157,11 @@ static void *disco_svc_no_gvl(void *data) {
 
 static VALUE rb_peripheral_discover_services(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct disco_svc_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
     rb_thread_call_without_gvl(disco_svc_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.tag, a.err);
+    if (a.err) raise_with(a.err);
     VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
     if (a.result) free(a.result);
     return s;
@@ -190,14 +180,14 @@ static void *disco_ch_no_gvl(void *data) {
 
 static VALUE rb_service_discover_characteristics(VALUE self, VALUE id_v, VALUE svc_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct disco_ch_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v),
         (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL
     };
     rb_thread_call_without_gvl(disco_ch_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.tag, a.err);
+    if (a.err) raise_with(a.err);
     VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
     if (a.result) free(a.result);
     return s;
@@ -217,14 +207,14 @@ static void *read_no_gvl(void *data) {
 
 static VALUE rb_characteristic_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct read_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
         (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0, NULL
     };
     rb_thread_call_without_gvl(read_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.buf) raise_with(a.tag, a.err);
+    if (!a.buf) raise_with(a.err);
     // Return a mutable binary String so callers can chain `.force_encoding("UTF-8")`
     // without `.dup` (matches Socket#read / IO#read conventions).
     VALUE s = rb_str_new((const char *)a.buf, a.len);
@@ -250,7 +240,7 @@ static void *write_no_gvl(void *data) {
 static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v,
                                      VALUE data_v, VALUE with_response_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     StringValue(data_v);
     Check_Type(with_response_v, T_FIXNUM);
     Check_Type(timeout_ms_v, T_FIXNUM);
@@ -261,7 +251,7 @@ static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE 
         0, NULL, 0
     };
     rb_thread_call_without_gvl(write_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.tag, a.err);
+    if (!a.ok) raise_with(a.err);
     return Qnil;
 }
 
@@ -278,14 +268,14 @@ static void *subscribe_no_gvl(void *data) {
 
 static VALUE rb_characteristic_subscribe(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct subscribe_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
         (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
     };
     rb_thread_call_without_gvl(subscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.sub_id == 0) raise_with(a.tag, a.err);
+    if (a.sub_id == 0) raise_with(a.err);
     return LL2NUM(a.sub_id);
 }
 
@@ -302,14 +292,14 @@ static void *unsubscribe_no_gvl(void *data) {
 
 static VALUE rb_characteristic_unsubscribe(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
-    if (!p) rb_raise(eClosed, "central is closed");
+    if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct unsubscribe_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
         (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
     };
     rb_thread_call_without_gvl(unsubscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.tag, a.err);
+    if (!a.ok) raise_with(a.err);
     return Qnil;
 }
 
@@ -351,14 +341,9 @@ static VALUE rb_subscription_close(VALUE self, VALUE central_id_v, VALUE sub_id_
 
 void Init_corebluetooth_mac(void) {
     VALUE mod = rb_define_module("CoreBluetoothMac");
-    eCbm     = rb_const_get(mod, rb_intern("Error"));
-    eState   = rb_const_get(mod, rb_intern("StateError"));
-    ePerm    = rb_const_get(mod, rb_intern("PermissionError"));
-    eTimeout = rb_const_get(mod, rb_intern("TimeoutError"));
-    eConn    = rb_const_get(mod, rb_intern("ConnectionError"));
-    eDisco   = rb_const_get(mod, rb_intern("DiscoveryError"));
-    eIO      = rb_const_get(mod, rb_intern("IOError"));
-    eClosed  = rb_const_get(mod, rb_intern("ClosedError"));
+    // The Ruby-side `errors.rb` is required by `corebluetooth_mac.rb` before
+    // this native extension is loaded, so `CoreBluetoothMac::Error` is defined.
+    eErrorClass = rb_const_get(mod, rb_intern("Error"));
 
     rb_define_singleton_method(mod, "__hello", rb_cbm_hello, 0);
 

@@ -23,7 +23,7 @@ module CoreBluetoothMac
     end
 
     def services
-      @services || raise(ClosedError, "call discover_services first")
+      @services || raise(Error.new("call discover_services first", domain: :closed))
     end
 
     def find_service(uuid)
