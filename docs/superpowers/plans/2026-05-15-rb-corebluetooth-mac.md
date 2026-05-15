@@ -2949,6 +2949,7 @@ Delegate to `commit-commands:commit-push-pr` or general-purpose:
 
 **Files:**
 - Modify: `lib/corebluetooth_mac/version.rb`
+- Modify: `test/unit/test_module.rb`
 
 - [ ] **Step 1: Bump VERSION**
 
@@ -2960,9 +2961,21 @@ module CoreBluetoothMac
 end
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Relax `test_VERSION_is_semver` regex to accept the RubyGems prerelease suffix**
 
-- Files: `lib/corebluetooth_mac/version.rb`
+The Task 3 regex `\A\d+\.\d+\.\d+\z` rejected any prerelease tail. Accept an optional `.<word>` suffix so RubyGems-style `0.2.0.pre` / `0.2.0.beta1` pass.
+
+In `test/unit/test_module.rb`, replace the regex:
+
+```ruby
+def test_VERSION_is_semver
+  assert_match(/\A\d+\.\d+\.\d+(\.[a-z]\w*)?\z/, CoreBluetoothMac::VERSION)
+end
+```
+
+- [ ] **Step 3: Commit**
+
+- Files: `lib/corebluetooth_mac/version.rb`, `test/unit/test_module.rb`
 - Message: `chore: bump version to 0.2.0.pre for Phase 2 work`
 
 ---

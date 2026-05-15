@@ -8,7 +8,7 @@ class ModuleTest < Test::Unit::TestCase
   end
 
   def test_VERSION_is_semver
-    assert_match(/\A\d+\.\d+\.\d+\z/, CoreBluetoothMac::VERSION)
+    assert_match(/\A\d+\.\d+\.\d+(\.[a-z]\w*)?\z/, CoreBluetoothMac::VERSION)
   end
 end
 
