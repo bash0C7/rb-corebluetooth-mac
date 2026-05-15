@@ -52,6 +52,34 @@ end
 central.disconnect(peripheral)
 ```
 
+## Usage (Phase 2): write & subscribe with Ractor pump
+
+```ruby
+require "corebluetooth_mac"
+
+central = CoreBluetoothMac::Central.new
+device  = central.scan(name: "StackChan-PicoRuby", timeout: 5.0).first or abort
+periph  = central.connect(device)
+periph.discover_services
+periph.services.each(&:discover_characteristics)
+
+rx = periph.find_characteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e")
+tx = periph.find_characteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+
+rx.write("ping\n", response: true)
+sub = tx.subscribe
+
+pump = Ractor.new(sub) do |s|
+  while (v = s.next_value(timeout: 5.0))
+    Ractor.yield v
+  end
+end
+
+5.times { puts pump.take.inspect }
+tx.unsubscribe
+central.disconnect(periph)
+```
+
 ## Errors
 
 - `CoreBluetoothMac::PermissionError` — Bluetooth permission denied for this process.

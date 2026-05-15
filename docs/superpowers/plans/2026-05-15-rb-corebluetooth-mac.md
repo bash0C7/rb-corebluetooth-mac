@@ -3738,6 +3738,13 @@ end
 - Files: `test/integration/test_subscribe.rb`, `test/integration/test_subscribe_ractor.rb`, `examples/subscribe_ractor.rb`, `README.md`, `lib/corebluetooth_mac/version.rb`
 - Message: `feat: Subscription Ractor pump example + Phase 2 integration tests`
 
+- [ ] **Step 8: Tag the Phase 2 milestone**
+
+Delegate to `commit-commands` or `general-purpose`:
+> Prompt: `cd /Users/bash/dev/src/github.com/bash0C7/rb-corebluetooth-mac && git tag v0.2.0`
+
+(Don't push the tag until the user okays it. Symmetric with Task 17's v0.1.0 tagging step.)
+
 ---
 
 ## Self-Review (executed before declaring plan complete)
