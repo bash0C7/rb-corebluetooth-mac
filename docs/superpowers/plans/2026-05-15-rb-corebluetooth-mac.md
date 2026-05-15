@@ -2724,9 +2724,10 @@ static VALUE rb_characteristic_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE c
     };
     rb_thread_call_without_gvl(read_no_gvl, &a, RUBY_UBF_IO, NULL);
     if (!a.buf) raise_with(a.tag, a.err);
+    // Return a mutable binary String so callers can chain `.force_encoding("UTF-8")`
+    // without `.dup` (matches Socket#read / IO#read conventions).
     VALUE s = rb_str_new((const char *)a.buf, a.len);
     free(a.buf);
-    rb_str_freeze(s);
     return s;
 }
 ```
