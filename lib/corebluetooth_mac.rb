@@ -15,3 +15,5 @@ module CoreBluetoothMac
   class IOError         < Error;          end
   class ClosedError     < Error;          end
 end
+
+require_relative "corebluetooth_mac/discovered_device"
