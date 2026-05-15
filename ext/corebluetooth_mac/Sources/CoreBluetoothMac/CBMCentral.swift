@@ -159,6 +159,50 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         }
     }
 
+    func discoverServices(identifier: String, timeoutMs: Int32) -> Result<[String], CBMError> {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.closed("Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        d.servicesError = nil
+        p.discoverServices(nil)
+        let r = d.servicesSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        if r == .timedOut { return .failure(.timeout("discoverServices timed out after \(timeoutMs)ms")) }
+        if let e = d.servicesError { return .failure(.discovery(e.localizedDescription)) }
+        let uuids = (p.services ?? []).map { $0.uuid.uuidString.lowercased() }
+        return .success(uuids)
+    }
+
+    func discoverCharacteristics(identifier: String, serviceUUID: String, timeoutMs: Int32)
+        -> Result<[[String: Any]], CBMError>
+    {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.closed("Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        let targetUUID = CBUUID(string: serviceUUID)
+        guard let service = (p.services ?? []).first(where: { $0.uuid == targetUUID }) else {
+            return .failure(.discovery("Service \(serviceUUID) not found on peripheral"))
+        }
+        d.charsServiceUUID = targetUUID
+        d.charsError = nil
+        p.discoverCharacteristics(nil, for: service)
+        let r = d.charsSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        d.charsServiceUUID = nil
+        if r == .timedOut { return .failure(.timeout("discoverCharacteristics timed out after \(timeoutMs)ms")) }
+        if let e = d.charsError { return .failure(.discovery(e.localizedDescription)) }
+        let arr: [[String: Any]] = (service.characteristics ?? []).map { ch in
+            var props: [String] = []
+            if ch.properties.contains(.read)                 { props.append("read") }
+            if ch.properties.contains(.write)                { props.append("write") }
+            if ch.properties.contains(.writeWithoutResponse) { props.append("write_without_response") }
+            if ch.properties.contains(.notify)               { props.append("notify") }
+            if ch.properties.contains(.indicate)             { props.append("indicate") }
+            return ["uuid": ch.uuid.uuidString.lowercased(), "properties": props]
+        }
+        return .success(arr)
+    }
+
     // MARK: CBCentralManagerDelegate – connect lifecycle
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {

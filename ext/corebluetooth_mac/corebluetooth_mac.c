@@ -154,6 +154,55 @@ static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
     return ID2SYM(rb_intern(StringValueCStr(s)));
 }
 
+struct disco_svc_args {
+    void *p; const char *id; int32_t timeout_ms;
+    int32_t tag; char *err; char *result;
+};
+
+static void *disco_svc_no_gvl(void *data) {
+    struct disco_svc_args *a = (struct disco_svc_args *)data;
+    a->result = cbm_peripheral_discover_services(a->p, a->id, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_peripheral_discover_services(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct disco_svc_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
+    rb_thread_call_without_gvl(disco_svc_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (a.err) raise_with(a.tag, a.err);
+    VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
+    if (a.result) free(a.result);
+    return s;
+}
+
+struct disco_ch_args {
+    void *p; const char *id; const char *svc_uuid; int32_t timeout_ms;
+    int32_t tag; char *err; char *result;
+};
+
+static void *disco_ch_no_gvl(void *data) {
+    struct disco_ch_args *a = (struct disco_ch_args *)data;
+    a->result = cbm_service_discover_characteristics(a->p, a->id, a->svc_uuid, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_service_discover_characteristics(VALUE self, VALUE id_v, VALUE svc_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct disco_ch_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v),
+        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL
+    };
+    rb_thread_call_without_gvl(disco_ch_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (a.err) raise_with(a.tag, a.err);
+    VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
+    if (a.result) free(a.result);
+    return s;
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -177,4 +226,6 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "connect",          rb_central_connect,    2);
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
     rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
+    rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       2);
+    rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
 }

@@ -117,3 +117,52 @@ public func cbm_peripheral_state(
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
     return strdup(c.peripheralState(identifier: String(cString: identifier)))
 }
+
+@c
+public func cbm_peripheral_discover_services(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ timeout_ms: Int32,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<CChar>? {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.discoverServices(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
+    case .success(let uuids):
+        let data = try! JSONSerialization.data(withJSONObject: uuids)
+        return strdup(String(data: data, encoding: .utf8) ?? "[]")
+    case .failure(let err):
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return nil
+    }
+}
+
+@c
+public func cbm_service_discover_characteristics(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ timeout_ms: Int32,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<CChar>? {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.discoverCharacteristics(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let arr):
+        let data = try! JSONSerialization.data(withJSONObject: arr)
+        return strdup(String(data: data, encoding: .utf8) ?? "[]")
+    case .failure(let err):
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return nil
+    }
+}

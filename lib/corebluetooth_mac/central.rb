@@ -46,6 +46,10 @@ module CoreBluetoothMac
       case op
       when :peripheral_state
         @native.peripheral_state(*args)
+      when :peripheral_discover_services
+        JSON.parse(@native.discover_services(*args))
+      when :service_discover_characteristics
+        JSON.parse(@native.discover_characteristics(*args))
       else
         raise ArgumentError, "unknown native op: #{op}"
       end
