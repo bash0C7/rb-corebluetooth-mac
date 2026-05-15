@@ -17,3 +17,4 @@ module CoreBluetoothMac
 end
 
 require_relative "corebluetooth_mac/discovered_device"
+require_relative "corebluetooth_mac/subscription"
