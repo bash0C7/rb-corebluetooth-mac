@@ -141,6 +141,44 @@ public func cbm_peripheral_discover_services(
 }
 
 @c
+public func cbm_characteristic_read(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ char_uuid: UnsafePointer<CChar>,
+    _ timeout_ms: Int32,
+    _ len_out: UnsafeMutablePointer<Int32>,
+    _ error_tag_out: UnsafeMutablePointer<Int32>,
+    _ error_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<UInt8>? {
+    error_tag_out.pointee = 0
+    error_out.pointee = nil
+    len_out.pointee = 0
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.readCharacteristic(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        charUUID: String(cString: char_uuid),
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let data):
+        let n = data.count
+        len_out.pointee = Int32(n)
+        if n == 0 {
+            let buf = malloc(1)?.assumingMemoryBound(to: UInt8.self)
+            return buf
+        }
+        let buf = malloc(n)!.assumingMemoryBound(to: UInt8.self)
+        data.copyBytes(to: buf, count: n)
+        return buf
+    case .failure(let err):
+        error_tag_out.pointee = cbmErrorTag(err)
+        error_out.pointee = strdup(cbmErrorMessage(err))
+        return nil
+    }
+}
+
+@c
 public func cbm_service_discover_characteristics(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,

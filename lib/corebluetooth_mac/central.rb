@@ -50,6 +50,8 @@ module CoreBluetoothMac
         JSON.parse(@native.discover_services(*args))
       when :service_discover_characteristics
         JSON.parse(@native.discover_characteristics(*args))
+      when :characteristic_read
+        @native.characteristic_read(*args)
       else
         raise ArgumentError, "unknown native op: #{op}"
       end

@@ -203,6 +203,32 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return .success(arr)
     }
 
+    func readCharacteristic(identifier: String, serviceUUID: String, charUUID: String, timeoutMs: Int32)
+        -> Result<Data, CBMError>
+    {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.closed("Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        let svcId = CBUUID(string: serviceUUID)
+        let chId  = CBUUID(string: charUUID)
+        guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }) else {
+            return .failure(.discovery("Service \(serviceUUID) not discovered"))
+        }
+        guard let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
+            return .failure(.discovery("Characteristic \(charUUID) not discovered"))
+        }
+        d.readCharUUID = chId
+        d.readError = nil
+        d.readValue = nil
+        p.readValue(for: ch)
+        let r = d.readSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        d.readCharUUID = nil
+        if r == .timedOut { return .failure(.timeout("read timed out after \(timeoutMs)ms")) }
+        if let e = d.readError { return .failure(.io(e.localizedDescription)) }
+        return .success(d.readValue ?? Data())
+    }
+
     // MARK: CBCentralManagerDelegate – connect lifecycle
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {

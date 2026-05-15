@@ -203,6 +203,35 @@ static VALUE rb_service_discover_characteristics(VALUE self, VALUE id_v, VALUE s
     return s;
 }
 
+struct read_args {
+    void *p; const char *id; const char *svc; const char *ch;
+    int32_t timeout_ms; int32_t tag; char *err; int32_t len;
+    unsigned char *buf;
+};
+
+static void *read_no_gvl(void *data) {
+    struct read_args *a = (struct read_args *)data;
+    a->buf = cbm_characteristic_read(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->len, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_characteristic_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct read_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0, NULL
+    };
+    rb_thread_call_without_gvl(read_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.buf) raise_with(a.tag, a.err);
+    // Return a mutable binary String so callers can chain `.force_encoding("UTF-8")`
+    // without `.dup` (matches Socket#read / IO#read conventions).
+    VALUE s = rb_str_new((const char *)a.buf, a.len);
+    free(a.buf);
+    return s;
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -228,4 +257,5 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       2);
     rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
+    rb_define_method(cNative, "characteristic_read",      rb_characteristic_read,                4);
 }
