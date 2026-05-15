@@ -265,6 +265,88 @@ static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE 
     return Qnil;
 }
 
+struct subscribe_args {
+    void *p; const char *id; const char *svc; const char *ch;
+    int32_t timeout_ms; int32_t tag; char *err; int64_t sub_id;
+};
+
+static void *subscribe_no_gvl(void *data) {
+    struct subscribe_args *a = (struct subscribe_args *)data;
+    a->sub_id = cbm_characteristic_subscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_characteristic_subscribe(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct subscribe_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
+    };
+    rb_thread_call_without_gvl(subscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (a.sub_id == 0) raise_with(a.tag, a.err);
+    return LL2NUM(a.sub_id);
+}
+
+struct unsubscribe_args {
+    void *p; const char *id; const char *svc; const char *ch;
+    int32_t timeout_ms; int32_t tag; char *err; int32_t ok;
+};
+
+static void *unsubscribe_no_gvl(void *data) {
+    struct unsubscribe_args *a = (struct unsubscribe_args *)data;
+    a->ok = cbm_characteristic_unsubscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->tag, &a->err);
+    return NULL;
+}
+
+static VALUE rb_characteristic_unsubscribe(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eClosed, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct unsubscribe_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
+    };
+    rb_thread_call_without_gvl(unsubscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.ok) raise_with(a.tag, a.err);
+    return Qnil;
+}
+
+// ---- Module-level subscription functions (operate on integer ids) ----
+
+struct next_args {
+    int64_t sub_id; int32_t timeout_ms;
+    int32_t closed; int32_t len; unsigned char *buf;
+};
+
+static void *next_no_gvl(void *data) {
+    struct next_args *a = (struct next_args *)data;
+    a->buf = cbm_subscription_next_value(a->sub_id, a->timeout_ms, &a->closed, &a->len);
+    return NULL;
+}
+
+static VALUE rb_subscription_next_value(VALUE self, VALUE central_id_v, VALUE sub_id_v, VALUE timeout_ms_v) {
+    (void)central_id_v;  // reserved for future multi-central isolation
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct next_args a = { (int64_t)NUM2LL(sub_id_v), (int32_t)NUM2INT(timeout_ms_v), 0, 0, NULL };
+    rb_thread_call_without_gvl(next_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.buf) {
+        return Qnil;  // timeout or closed-empty
+    }
+    // Mutable binary String, same convention as characteristic_read — callers
+    // can chain `.force_encoding("UTF-8")` without `.dup` (matches Socket#read).
+    VALUE s = rb_str_new((const char *)a.buf, a.len);
+    free(a.buf);
+    return s;
+}
+
+static VALUE rb_subscription_close(VALUE self, VALUE central_id_v, VALUE sub_id_v) {
+    (void)central_id_v;
+    cbm_subscription_close((int64_t)NUM2LL(sub_id_v));
+    return Qnil;
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -292,4 +374,9 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
     rb_define_method(cNative, "characteristic_read",      rb_characteristic_read,                4);
     rb_define_method(cNative, "characteristic_write",     rb_characteristic_write,               6);
+    rb_define_method(cNative, "characteristic_subscribe",   rb_characteristic_subscribe,   4);
+    rb_define_method(cNative, "characteristic_unsubscribe", rb_characteristic_unsubscribe, 4);
+
+    rb_define_module_function(mod, "__subscription_next_value", rb_subscription_next_value, 3);
+    rb_define_module_function(mod, "__subscription_close",      rb_subscription_close,      2);
 }

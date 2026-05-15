@@ -283,4 +283,47 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             }
         }
     }
+
+    func subscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
+                                  timeoutMs: Int32) -> Result<Int64, CBMError> {
+        guard let (p, d) = peripheral(identifier: identifier) else { return .failure(.closed("Unknown peripheral")) }
+        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        let svcId = CBUUID(string: serviceUUID)
+        let chId  = CBUUID(string: charUUID)
+        guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
+              let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
+            return .failure(.discovery("Service/characteristic not discovered"))
+        }
+        d.notifyCharUUID = chId
+        d.notifyError = nil
+        p.setNotifyValue(true, for: ch)
+        let r = d.notifySem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        d.notifyCharUUID = nil
+        if r == .timedOut { return .failure(.timeout("subscribe timed out")) }
+        if let e = d.notifyError { return .failure(.io(e.localizedDescription)) }
+        let id = CBMSubscriptionRegistry.shared.register(central: self, characteristicUUID: chId)
+        return .success(id)
+    }
+
+    func unsubscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
+                                    timeoutMs: Int32) -> CBMError? {
+        guard let (p, d) = peripheral(identifier: identifier) else { return .closed("Unknown peripheral") }
+        guard p.state == .connected else { return .connection("Peripheral not connected") }
+        let svcId = CBUUID(string: serviceUUID)
+        let chId  = CBUUID(string: charUUID)
+        guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
+              let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
+            return .discovery("Service/characteristic not discovered")
+        }
+        d.notifyCharUUID = chId
+        d.notifyError = nil
+        p.setNotifyValue(false, for: ch)
+        let r = d.notifySem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        d.notifyCharUUID = nil
+        if r == .timedOut { return .timeout("unsubscribe timed out") }
+        if let e = d.notifyError { return .io(e.localizedDescription) }
+        // Close all subscriptions matching this characteristic UUID under this central.
+        CBMSubscriptionRegistry.shared.purgeAll(under: self) // simpler than per-char; safe for Phase 2 single-subscription cases
+        return nil
+    }
 }

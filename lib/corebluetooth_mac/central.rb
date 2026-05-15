@@ -54,6 +54,10 @@ module CoreBluetoothMac
         @native.characteristic_read(*args)
       when :characteristic_write
         @native.characteristic_write(*args)
+      when :characteristic_subscribe
+        @native.characteristic_subscribe(args[0], args[1], args[2], 5000)  # 5s default subscribe timeout
+      when :characteristic_unsubscribe
+        @native.characteristic_unsubscribe(args[0], args[1], args[2], 5000)
       else
         raise ArgumentError, "unknown native op: #{op}"
       end

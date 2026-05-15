@@ -3186,7 +3186,11 @@ final class CBMSubscriptionRegistry: @unchecked Sendable {
     static let shared = CBMSubscriptionRegistry()
     private init() {}
 
-    final class Entry {
+    // `@unchecked Sendable` is required because `OSAllocatedUnfairLock<[Int64: Entry]>`
+    // captures the dictionary in `@Sendable` closures; the outer class's `@unchecked`
+    // does not propagate to nested classes under Swift 6 strict concurrency. All
+    // mutable state (`queue`, `closed`) is serialized via the outer `lock`.
+    final class Entry: @unchecked Sendable {
         weak var central: CBMCentral?
         let characteristicUUID: CBUUID
         var queue: [Data] = []
@@ -3248,7 +3252,8 @@ final class CBMSubscriptionRegistry: @unchecked Sendable {
     }
 
     func purge(subscriptionId: Int64) {
-        lock.withLock { $0.removeValue(forKey: subscriptionId) }
+        // Discard the removed value explicitly; Swift 6 warns on unused withLock return.
+        lock.withLock { _ = $0.removeValue(forKey: subscriptionId) }
     }
 
     func purgeAll(under central: CBMCentral) {
@@ -3481,9 +3486,10 @@ static VALUE rb_subscription_next_value(VALUE self, VALUE central_id_v, VALUE su
     if (!a.buf) {
         return Qnil;  // timeout or closed-empty
     }
+    // Mutable binary String, same convention as characteristic_read — callers
+    // can chain `.force_encoding("UTF-8")` without `.dup` (matches Socket#read).
     VALUE s = rb_str_new((const char *)a.buf, a.len);
     free(a.buf);
-    rb_str_freeze(s);
     return s;
 }
 
