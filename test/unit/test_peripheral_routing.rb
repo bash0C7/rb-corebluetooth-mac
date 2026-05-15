@@ -87,6 +87,10 @@ class ServiceRoutingTest < Test::Unit::TestCase
   def test_characteristics_raises_before_discover
     assert_raise(CoreBluetoothMac::ClosedError) { @service.characteristics }
   end
+
+  def test_find_characteristic_raises_before_discover
+    assert_raise(CoreBluetoothMac::ClosedError) { @service.find_characteristic("anything") }
+  end
 end
 
 class CharacteristicRoutingTest < Test::Unit::TestCase

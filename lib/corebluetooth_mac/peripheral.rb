@@ -33,7 +33,7 @@ module CoreBluetoothMac
 
     def find_characteristic(uuid)
       target = uuid.downcase
-      (services || []).each do |svc|
+      (@services || []).each do |svc|
         next unless svc.characteristics_loaded?
         ch = svc.characteristics.find { |c| c.uuid.casecmp?(target) }
         return ch if ch
