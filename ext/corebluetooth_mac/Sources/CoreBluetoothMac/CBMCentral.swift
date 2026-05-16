@@ -12,6 +12,34 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     private let stateLock = OSAllocatedUnfairLock<CBManagerState>(initialState: .unknown)
     private let stateSem = DispatchSemaphore(value: 0)
 
+    // Task 15: closed-state gate. Set once via `close()` (idempotent); every
+    // public op short-circuits with a `:closed` domain error so callers stop
+    // relying on GC for teardown.
+    private let closedFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+
+    var isClosed: Bool { closedFlag.withLock { $0 } }
+
+    func close() {
+        let already = closedFlag.withLock { state -> Bool in
+            defer { state = true }
+            return state
+        }
+        if already { return }
+        CBMSubscriptionRegistry.shared.purgeAll(under: self)
+        // `queue.sync` serializes teardown against any in-flight delegate
+        // callbacks (which run on the central's queue). Snapshot delegates
+        // before clearing so we can null out their peripheral.delegate first.
+        queue.sync {
+            let snapshot = delegatesLock.withLock { Array($0.values) }
+            for d in snapshot {
+                d.peripheral.delegate = nil
+            }
+            delegatesLock.withLock { $0.removeAll() }
+            knownPeripherals.withLock { $0.removeAll() }
+            manager.delegate = nil
+        }
+    }
+
     override init() {
         // Assign a unique id atomically.
         let assigned: Int64 = Self.idCounter.withLock { state in
@@ -26,6 +54,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func awaitPoweredOn(timeoutMs: Int32) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         let deadline = DispatchTime.now() + .milliseconds(Int(timeoutMs))
         while true {
             let cur = stateLock.withLock { $0 }
@@ -66,6 +95,10 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     private let knownPeripherals = OSAllocatedUnfairLock<[UUID: CBPeripheral]>(initialState: [:])
 
     func scan(name: String?, services: [CBUUID]?, timeoutMs: Int32) -> [ScanResult] {
+        // Closed-gate enforcement lives in the @c shim (`cbm_central_scan`),
+        // which has the error envelope to surface the failure. Defensive early
+        // return here just avoids touching `manager` after teardown.
+        if isClosed { return [] }
         scanLock.withLock { $0.removeAll() }
         nameFilter.withLock { $0 = name }
         let options: [String: Any] = [CBCentralManagerScanOptionAllowDuplicatesKey: true]
@@ -183,6 +216,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func connect(identifier: String, timeoutMs: Int32) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .lib(domain: "connection", message: "Unknown peripheral identifier \(identifier); scan first.")
         }
@@ -197,6 +231,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func disconnect(identifier: String) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         guard let (p, _) = peripheral(identifier: identifier) else {
             return .lib(domain: "closed", message: "Unknown peripheral identifier \(identifier).")
         }
@@ -205,6 +240,9 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func peripheralState(identifier: String) -> String {
+        // No error channel here — surface a distinct sentinel so the Ruby
+        // wrapper can interpret it (current callers only consume the symbol).
+        if isClosed { return "closed" }
         guard let (p, _) = peripheral(identifier: identifier) else { return "unknown" }
         switch p.state {
         case .disconnected:  return "disconnected"
@@ -216,6 +254,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func discoverServices(identifier: String, serviceUUIDs: [CBUUID]?, timeoutMs: Int32) -> Result<[[String: Any]], CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -238,6 +277,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     func discoverCharacteristics(identifier: String, serviceUUID: String, timeoutMs: Int32)
         -> Result<[[String: Any]], CBMError>
     {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -277,6 +317,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     func discoverIncludedServices(identifier: String, serviceUUID: String, timeoutMs: Int32)
         -> Result<[[String: Any]], CBMError>
     {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -304,6 +345,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     func readCharacteristic(identifier: String, serviceUUID: String, charUUID: String, timeoutMs: Int32)
         -> Result<Data, CBMError>
     {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -329,6 +371,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func writeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                               data: Data, withResponse: Bool, timeoutMs: Int32) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         guard let (p, d) = peripheral(identifier: identifier) else { return .lib(domain: "closed", message: "Unknown peripheral \(identifier)") }
         guard p.state == .connected else { return .lib(domain: "connection", message: "Peripheral not connected") }
         let svcId = CBUUID(string: serviceUUID)
@@ -418,6 +461,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func readRSSI(identifier: String, timeoutMs: Int32) -> Result<Int, CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -436,6 +480,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func maxWriteLength(identifier: String, withResponse: Bool) -> Result<Int, CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, _) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -445,23 +490,31 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func lastDisconnectError(identifier: String) -> NSError? {
+        // After close the delegate table is empty, so `delegate(for:)` already
+        // returns nil — the explicit gate keeps intent obvious.
+        if isClosed { return nil }
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }
         return d.lastDisconnectInfo.withLock { $0 }
     }
 
-    // Task 13: drain one event from the per-peripheral queue. Returns nil on
-    // timeout or unknown identifier (caller surfaces both as ok-envelope/null).
+    // Task 13/15: drain one event from the per-peripheral queue.
+    // Result shape distinguishes three cases the caller must surface differently:
+    //   .failure(.lib(domain: "closed", ...))     — central closed
+    //   .failure(.lib(domain: "validation", ...)) — bad UUID or unknown peripheral
+    //   .success(nil)                              — timeout (no event yet)
+    //   .success(.some((tag, payload)))            — event drained
     func pollPeripheralEvents(identifier: String, timeoutMs: Int32)
-        -> (tag: String, payload: [String: Any])?
+        -> Result<(tag: String, payload: [String: Any])?, CBMError>
     {
-        // TODO(Task 15): An unknown identifier currently returns nil, which Ruby reads as a
-        // timeout from the JSON envelope. After Central#close lands, this should distinguish
-        // "peripheral not tracked" from "no event yet" — likely via a `:closed`/`:not_found`
-        // error domain rather than the timeout-shaped success envelope.
-        guard let uuid = UUID(uuidString: identifier),
-              let d = delegate(for: uuid) else { return nil }
-        return d.pollEvent(timeoutMs: timeoutMs)
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
+        guard let uuid = UUID(uuidString: identifier) else {
+            return .failure(.lib(domain: "validation", message: "invalid peripheral identifier"))
+        }
+        guard let d = delegate(for: uuid) else {
+            return .failure(.lib(domain: "validation", message: "peripheral not tracked"))
+        }
+        return .success(d.pollEvent(timeoutMs: timeoutMs))
     }
 
     // MARK: - Private helpers
@@ -484,6 +537,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func discoverDescriptors(identifier: String, serviceUUID: String, charUUID: String,
                               timeoutMs: Int32) -> Result<[[String: Any]], CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -507,6 +561,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func readDescriptor(identifier: String, serviceUUID: String, charUUID: String,
                          descUUID: String, timeoutMs: Int32) -> Result<Data, CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
@@ -530,6 +585,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func writeDescriptor(identifier: String, serviceUUID: String, charUUID: String,
                           descUUID: String, data: Data, timeoutMs: Int32) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .lib(domain: "closed", message: "Unknown peripheral \(identifier)")
         }
@@ -556,6 +612,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func subscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                                   timeoutMs: Int32) -> Result<Int64, CBMError> {
+        if isClosed { return .failure(.lib(domain: "closed", message: "Central closed")) }
         guard let (p, d) = peripheral(identifier: identifier) else { return .failure(.lib(domain: "closed", message: "Unknown peripheral")) }
         guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         let svcId = CBUUID(string: serviceUUID)
@@ -577,6 +634,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func unsubscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                                     timeoutMs: Int32) -> CBMError? {
+        if isClosed { return .lib(domain: "closed", message: "Central closed") }
         guard let (p, d) = peripheral(identifier: identifier) else { return .lib(domain: "closed", message: "Unknown peripheral") }
         guard p.state == .connected else { return .lib(domain: "connection", message: "Peripheral not connected") }
         let svcId = CBUUID(string: serviceUUID)

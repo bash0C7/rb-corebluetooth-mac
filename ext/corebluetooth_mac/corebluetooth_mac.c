@@ -133,6 +133,16 @@ static VALUE rb_central_id(VALUE self) {
     return LL2NUM(cbm_central_id(p));
 }
 
+// Task 15: explicit close. Calls the idempotent native teardown; the TypedData
+// pointer stays attached so subsequent calls go through the `isClosed` gate
+// and surface proper `:closed` domain errors via the envelope.
+static VALUE rb_central_close(VALUE self) {
+    void *p = DATA_PTR(self);
+    if (!p) return Qnil;
+    cbm_central_close(p);
+    return Qnil;
+}
+
 // ---- scan (releases GVL while delegate fills results) ----
 
 struct scan_args {
@@ -628,6 +638,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_alloc_func(cNative, rb_central_alloc);
     rb_define_method(cNative, "initialize", rb_central_init, 1);
     rb_define_method(cNative, "central_id", rb_central_id,   0);
+    rb_define_method(cNative, "close",      rb_central_close, 0);
     rb_define_method(cNative, "scan",       rb_central_scan, 3);
     rb_define_method(cNative, "connect",          rb_central_connect,    2);
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);

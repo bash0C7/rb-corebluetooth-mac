@@ -35,8 +35,16 @@ public func cbm_central_new(
 @c
 public func cbm_central_free(_ ptr: UnsafeMutableRawPointer) {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeRetainedValue()
-    CBMSubscriptionRegistry.shared.purgeAll(under: c)
-    // Optionally cancel all active connections; CBCentralManager deinit handles it.
+    // Task 15: `close()` is idempotent and handles purgeAll + delegate teardown.
+    // Calling it from the TypedData free path covers GC-only callers; explicit
+    // `Central#close` from Ruby still wins because of the idempotency guard.
+    c.close()
+}
+
+@c
+public func cbm_central_close(_ ptr: UnsafeMutableRawPointer) {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    c.close()
 }
 
 @c
@@ -53,6 +61,10 @@ public func cbm_central_scan(
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    // Task 15: surface a closed-domain error to Ruby instead of an empty array.
+    if c.isClosed {
+        return strdup(CBMEnvelope.err(.lib(domain: "closed", message: "Central closed")))
+    }
     let nameStr: String? = name_filter.map { String(cString: $0) }
     var services: [CBUUID]? = nil
     if let json = service_uuids_json {
@@ -271,17 +283,17 @@ public func cbm_peripheral_poll_events(
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Timeout / unknown identifier → ok-envelope with data=null. Ruby
-    // `Peripheral#poll_events` treats nil as "no event ready".
-    guard let ev = c.pollPeripheralEvents(
-        identifier: String(cString: identifier),
-        timeoutMs: timeout_ms
-    ) else {
+    // Task 15: Swift returns a Result now. Closed / unknown-identifier are
+    // distinct errors; success(nil) is timeout; success(some) is an event.
+    switch c.pollPeripheralEvents(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
+    case .failure(let err):
+        return strdup(CBMEnvelope.err(err))
+    case .success(nil):
         return strdup(CBMEnvelope.ok(nil))
+    case .success(.some(let ev)):
+        let data: [String: Any] = ["tag": ev.tag, "payload": ev.payload]
+        return strdup(CBMEnvelope.ok(data))
     }
-    // Event payload shape: {"tag": "<snake_case>", "payload": {...}}.
-    let data: [String: Any] = ["tag": ev.tag, "payload": ev.payload]
-    return strdup(CBMEnvelope.ok(data))
 }
 
 @c

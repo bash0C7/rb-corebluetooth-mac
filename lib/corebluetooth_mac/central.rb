@@ -46,7 +46,10 @@ module CoreBluetoothMac
     end
 
     def close
-      # Future task: explicit invalidation; relying on GC for now.
+      # Task 15: real teardown. Native `close` is idempotent (guarded by a
+      # `closedFlag` lock), so we don't need a Ruby-side bool. Operations
+      # after `close` raise `Error(domain: :closed)` via the native gate.
+      @native.close
       nil
     end
 
