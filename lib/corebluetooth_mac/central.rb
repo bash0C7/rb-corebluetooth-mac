@@ -16,8 +16,9 @@ module CoreBluetoothMac
       # zero peripherals. Normalize empty/nil to nil so Swift skips the filter.
       arr = services ? Array(services) : []
       services_json = arr.empty? ? nil : JSON.dump(arr)
+      # C bridge parses the JSON envelope and returns the unwrapped data array.
       raw = @native.scan(name, services_json, (timeout * 1000).to_i)
-      JSON.parse(raw).map do |h|
+      raw.map do |h|
         DiscoveredDevice.new(
           central_id: central_id,
           identifier: h["identifier"],
@@ -47,9 +48,11 @@ module CoreBluetoothMac
       when :peripheral_state
         @native.peripheral_state(*args)
       when :peripheral_discover_services
-        JSON.parse(@native.discover_services(*args))
+        # C bridge returns the already-parsed array of service UUID strings.
+        @native.discover_services(*args)
       when :service_discover_characteristics
-        JSON.parse(@native.discover_characteristics(*args))
+        # C bridge returns the already-parsed array of characteristic hashes.
+        @native.discover_characteristics(*args)
       when :characteristic_read
         @native.characteristic_read(*args)
       when :characteristic_write

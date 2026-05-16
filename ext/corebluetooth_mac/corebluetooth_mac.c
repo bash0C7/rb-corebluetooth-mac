@@ -5,15 +5,88 @@
 
 static VALUE eErrorClass;
 
-// ---- error raise ----
+// ---- envelope parsing ----
+//
+// Every Swift→C string return is a JSON envelope:
+//   {"ok": true,  "data": <payload-or-null>}
+//   {"ok": false, "error": {"domain","code","code_name","message"}}
+// `parse_envelope_str` parses the JSON, raises CoreBluetoothMac::Error on
+// `ok: false`, or returns the `data` Ruby VALUE on `ok: true`.
+// `parse_envelope_freed` is the common wrapper that also frees the C string.
 
-// NOTE: Tag-based domain dispatch was removed here — domain info will be
-// re-introduced via the JSON envelope in Plan Task 3. For Task 1 the C bridge
-// raises the single merged Error class with message only.
-static void raise_with(char *msg) {
-    VALUE m = rb_utf8_str_new_cstr(msg ? msg : "unknown error");
-    if (msg) free(msg);
-    rb_raise(eErrorClass, "%s", StringValueCStr(m));
+__attribute__((noreturn))
+static void raise_from_envelope_error(VALUE error_hash) {
+    VALUE domain_v    = rb_hash_aref(error_hash, rb_str_new_cstr("domain"));
+    VALUE code_v      = rb_hash_aref(error_hash, rb_str_new_cstr("code"));
+    VALUE code_name_v = rb_hash_aref(error_hash, rb_str_new_cstr("code_name"));
+    VALUE message_v   = rb_hash_aref(error_hash, rb_str_new_cstr("message"));
+
+    if (NIL_P(message_v)) message_v = rb_str_new_cstr("unknown error");
+
+    // Build kwargs hash. `domain` is always a symbol; `code` is integer or nil;
+    // `code_name` is symbol or nil. All other shapes are tolerated as best-effort.
+    VALUE kwargs = rb_hash_new();
+    if (!NIL_P(domain_v)) {
+        VALUE dsym = rb_funcall(domain_v, rb_intern("to_sym"), 0);
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("domain")), dsym);
+    } else {
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("domain")), ID2SYM(rb_intern("validation")));
+    }
+    rb_hash_aset(kwargs, ID2SYM(rb_intern("code")), code_v);
+    if (!NIL_P(code_name_v)) {
+        VALUE csym = rb_funcall(code_name_v, rb_intern("to_sym"), 0);
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("code_name")), csym);
+    } else {
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("code_name")), Qnil);
+    }
+
+    VALUE args[2];
+    args[0] = message_v;
+    args[1] = kwargs;
+    VALUE exc = rb_funcallv_kw(eErrorClass, rb_intern("new"), 2, args, RB_PASS_KEYWORDS);
+    rb_exc_raise(exc);
+}
+
+// Parse a JSON envelope and either raise (on ok: false) or return the data field.
+static VALUE parse_envelope_str(const char *json) {
+    if (!json) {
+        rb_raise(eErrorClass, "internal: nil envelope from native bridge");
+    }
+    VALUE str = rb_utf8_str_new_cstr(json);
+    VALUE json_mod = rb_const_get(rb_cObject, rb_intern("JSON"));
+    VALUE parsed = rb_funcall(json_mod, rb_intern("parse"), 1, str);
+    VALUE ok = rb_hash_aref(parsed, rb_str_new_cstr("ok"));
+    if (RTEST(ok)) {
+        return rb_hash_aref(parsed, rb_str_new_cstr("data"));
+    }
+    VALUE err = rb_hash_aref(parsed, rb_str_new_cstr("error"));
+    if (NIL_P(err)) {
+        rb_raise(eErrorClass, "malformed envelope: %s", json);
+    }
+    raise_from_envelope_error(err);
+    return Qnil; // unreachable
+}
+
+struct parse_ensure_args { const char *json; char *to_free; };
+
+static VALUE parse_envelope_body(VALUE p) {
+    struct parse_ensure_args *a = (struct parse_ensure_args *)p;
+    return parse_envelope_str(a->json);
+}
+
+static VALUE parse_envelope_ensure(VALUE p) {
+    struct parse_ensure_args *a = (struct parse_ensure_args *)p;
+    if (a->to_free) free(a->to_free);
+    return Qnil;
+}
+
+// Convenience: parse-and-free. Frees `json` regardless of raise/return.
+static VALUE parse_envelope_freed(char *json) {
+    if (!json) {
+        rb_raise(eErrorClass, "internal: nil envelope from native bridge");
+    }
+    struct parse_ensure_args a = { json, json };
+    return rb_ensure(parse_envelope_body, (VALUE)&a, parse_envelope_ensure, (VALUE)&a);
 }
 
 // ---- TypedData for Central ----
@@ -34,19 +107,22 @@ static VALUE rb_central_alloc(VALUE klass) {
 
 // ---- initialize (state-blocking, releases GVL) ----
 
-struct new_args { int32_t timeout_ms; int32_t tag; char *err; void *p; };
+struct new_args { int32_t timeout_ms; char *envelope; void *p; };
 
 static void *new_no_gvl(void *data) {
     struct new_args *a = (struct new_args *)data;
-    a->p = cbm_central_new(a->timeout_ms, &a->tag, &a->err);
+    a->p = cbm_central_new(a->timeout_ms, &a->envelope);
     return NULL;
 }
 
 static VALUE rb_central_init(VALUE self, VALUE timeout_ms_v) {
     Check_Type(timeout_ms_v, T_FIXNUM);
-    struct new_args a = { (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
+    struct new_args a = { (int32_t)NUM2INT(timeout_ms_v), NULL, NULL };
     rb_thread_call_without_gvl(new_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.p) raise_with(a.err);
+    // parse_envelope_freed raises on ok=false; on ok=true it returns the data
+    // payload (which is nil for cbm_central_new on success).
+    (void)parse_envelope_freed(a.envelope);
+    if (!a.p) rb_raise(eErrorClass, "internal: envelope ok but central pointer is null");
     DATA_PTR(self) = a.p;
     return self;
 }
@@ -64,14 +140,12 @@ struct scan_args {
     const char *name;
     const char *services_json;
     int32_t timeout_ms;
-    int32_t tag;
-    char *err;
-    char *result;
+    char *envelope;
 };
 
 static void *scan_no_gvl(void *data) {
     struct scan_args *a = (struct scan_args *)data;
-    a->result = cbm_central_scan(a->p, a->name, a->services_json, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_central_scan(a->p, a->name, a->services_json, a->timeout_ms);
     return NULL;
 }
 
@@ -84,14 +158,11 @@ static VALUE rb_central_scan(VALUE self, VALUE name_v, VALUE services_json_v, VA
         NIL_P(name_v) ? NULL : StringValueCStr(name_v),
         NIL_P(services_json_v) ? NULL : StringValueCStr(services_json_v),
         (int32_t)NUM2INT(timeout_ms_v),
-        0, NULL, NULL
+        NULL
     };
     rb_thread_call_without_gvl(scan_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.err);
-    if (!a.result) return rb_utf8_str_new_cstr("[]");
-    VALUE s = rb_utf8_str_new_cstr(a.result);
-    free(a.result);
-    return s;
+    VALUE data = parse_envelope_freed(a.envelope);
+    return NIL_P(data) ? rb_ary_new() : data;
 }
 
 // ---- hello (still useful for smoke) ----
@@ -106,12 +177,12 @@ static VALUE rb_cbm_hello(VALUE self) {
 
 struct connect_args {
     void *p; const char *id; int32_t timeout_ms;
-    int32_t tag; char *err; int32_t ok;
+    char *envelope;
 };
 
 static void *connect_no_gvl(void *data) {
     struct connect_args *a = (struct connect_args *)data;
-    a->ok = cbm_central_connect(a->p, a->id, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_central_connect(a->p, a->id, a->timeout_ms);
     return NULL;
 }
 
@@ -119,19 +190,17 @@ static VALUE rb_central_connect(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
-    struct connect_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0 };
+    struct connect_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), NULL };
     rb_thread_call_without_gvl(connect_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.err);
+    (void)parse_envelope_freed(a.envelope);
     return Qtrue;
 }
 
 static VALUE rb_central_disconnect(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
-    int32_t tag = 0; char *err = NULL;
-    int32_t ok = cbm_central_disconnect(p, StringValueCStr(id_v), &tag, &err);
-    (void)tag;
-    if (!ok) raise_with(err);
+    char *env = cbm_central_disconnect(p, StringValueCStr(id_v));
+    (void)parse_envelope_freed(env);
     return Qtrue;
 }
 
@@ -146,12 +215,12 @@ static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
 
 struct disco_svc_args {
     void *p; const char *id; int32_t timeout_ms;
-    int32_t tag; char *err; char *result;
+    char *envelope;
 };
 
 static void *disco_svc_no_gvl(void *data) {
     struct disco_svc_args *a = (struct disco_svc_args *)data;
-    a->result = cbm_peripheral_discover_services(a->p, a->id, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_peripheral_discover_services(a->p, a->id, a->timeout_ms);
     return NULL;
 }
 
@@ -159,22 +228,20 @@ static VALUE rb_peripheral_discover_services(VALUE self, VALUE id_v, VALUE timeo
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
-    struct disco_svc_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL };
+    struct disco_svc_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), NULL };
     rb_thread_call_without_gvl(disco_svc_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.err);
-    VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
-    if (a.result) free(a.result);
-    return s;
+    VALUE data = parse_envelope_freed(a.envelope);
+    return NIL_P(data) ? rb_ary_new() : data;
 }
 
 struct disco_ch_args {
     void *p; const char *id; const char *svc_uuid; int32_t timeout_ms;
-    int32_t tag; char *err; char *result;
+    char *envelope;
 };
 
 static void *disco_ch_no_gvl(void *data) {
     struct disco_ch_args *a = (struct disco_ch_args *)data;
-    a->result = cbm_service_discover_characteristics(a->p, a->id, a->svc_uuid, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_service_discover_characteristics(a->p, a->id, a->svc_uuid, a->timeout_ms);
     return NULL;
 }
 
@@ -184,24 +251,22 @@ static VALUE rb_service_discover_characteristics(VALUE self, VALUE id_v, VALUE s
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct disco_ch_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v),
-        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL
+        (int32_t)NUM2INT(timeout_ms_v), NULL
     };
     rb_thread_call_without_gvl(disco_ch_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.err) raise_with(a.err);
-    VALUE s = rb_utf8_str_new_cstr(a.result ? a.result : "[]");
-    if (a.result) free(a.result);
-    return s;
+    VALUE data = parse_envelope_freed(a.envelope);
+    return NIL_P(data) ? rb_ary_new() : data;
 }
 
 struct read_args {
     void *p; const char *id; const char *svc; const char *ch;
-    int32_t timeout_ms; int32_t tag; char *err; int32_t len;
+    int32_t timeout_ms; int32_t len; char *envelope;
     unsigned char *buf;
 };
 
 static void *read_no_gvl(void *data) {
     struct read_args *a = (struct read_args *)data;
-    a->buf = cbm_characteristic_read(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->len, &a->tag, &a->err);
+    a->buf = cbm_characteristic_read(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->len, &a->envelope);
     return NULL;
 }
 
@@ -211,10 +276,24 @@ static VALUE rb_characteristic_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE c
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct read_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
-        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0, NULL
+        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL
     };
     rb_thread_call_without_gvl(read_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.buf) raise_with(a.err);
+    // Swift contract: success → buf != NULL, envelope = ok-envelope;
+    //                  failure → buf == NULL, envelope = err-envelope.
+    // Parse the envelope first; on raise it frees buf via rb_protect.
+    if (!a.envelope) {
+        if (a.buf) free(a.buf);
+        rb_raise(eErrorClass, "internal: read returned no envelope");
+    }
+    if (!a.buf) {
+        // Error path. parse_envelope_freed will raise; nothing to free for buf.
+        (void)parse_envelope_freed(a.envelope);
+        // unreachable
+        return Qnil;
+    }
+    // Success path. Free envelope (we don't need its nil data) and return buf.
+    free(a.envelope);
     // Return a mutable binary String so callers can chain `.force_encoding("UTF-8")`
     // without `.dup` (matches Socket#read / IO#read conventions).
     VALUE s = rb_str_new((const char *)a.buf, a.len);
@@ -226,14 +305,13 @@ struct write_args {
     void *p; const char *id; const char *svc; const char *ch;
     const unsigned char *buf; int32_t buf_len;
     int32_t with_response; int32_t timeout_ms;
-    int32_t tag; char *err; int32_t ok;
+    char *envelope;
 };
 
 static void *write_no_gvl(void *data) {
     struct write_args *a = (struct write_args *)data;
-    a->ok = cbm_characteristic_write(a->p, a->id, a->svc, a->ch,
-                                     a->buf, a->buf_len, a->with_response, a->timeout_ms,
-                                     &a->tag, &a->err);
+    a->envelope = cbm_characteristic_write(a->p, a->id, a->svc, a->ch,
+                                           a->buf, a->buf_len, a->with_response, a->timeout_ms);
     return NULL;
 }
 
@@ -248,21 +326,21 @@ static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE 
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
         (const unsigned char *)RSTRING_PTR(data_v), (int32_t)RSTRING_LEN(data_v),
         (int32_t)NUM2INT(with_response_v), (int32_t)NUM2INT(timeout_ms_v),
-        0, NULL, 0
+        NULL
     };
     rb_thread_call_without_gvl(write_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.err);
+    (void)parse_envelope_freed(a.envelope);
     return Qnil;
 }
 
 struct subscribe_args {
     void *p; const char *id; const char *svc; const char *ch;
-    int32_t timeout_ms; int32_t tag; char *err; int64_t sub_id;
+    int32_t timeout_ms; char *envelope;
 };
 
 static void *subscribe_no_gvl(void *data) {
     struct subscribe_args *a = (struct subscribe_args *)data;
-    a->sub_id = cbm_characteristic_subscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_characteristic_subscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms);
     return NULL;
 }
 
@@ -272,21 +350,22 @@ static VALUE rb_characteristic_subscribe(VALUE self, VALUE id_v, VALUE svc_v, VA
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct subscribe_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
-        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
+        (int32_t)NUM2INT(timeout_ms_v), NULL
     };
     rb_thread_call_without_gvl(subscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (a.sub_id == 0) raise_with(a.err);
-    return LL2NUM(a.sub_id);
+    VALUE id = parse_envelope_freed(a.envelope);
+    // Data payload is the integer subscription id.
+    return id;
 }
 
 struct unsubscribe_args {
     void *p; const char *id; const char *svc; const char *ch;
-    int32_t timeout_ms; int32_t tag; char *err; int32_t ok;
+    int32_t timeout_ms; char *envelope;
 };
 
 static void *unsubscribe_no_gvl(void *data) {
     struct unsubscribe_args *a = (struct unsubscribe_args *)data;
-    a->ok = cbm_characteristic_unsubscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms, &a->tag, &a->err);
+    a->envelope = cbm_characteristic_unsubscribe(a->p, a->id, a->svc, a->ch, a->timeout_ms);
     return NULL;
 }
 
@@ -296,10 +375,10 @@ static VALUE rb_characteristic_unsubscribe(VALUE self, VALUE id_v, VALUE svc_v, 
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct unsubscribe_args a = {
         p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
-        (int32_t)NUM2INT(timeout_ms_v), 0, NULL, 0
+        (int32_t)NUM2INT(timeout_ms_v), NULL
     };
     rb_thread_call_without_gvl(unsubscribe_no_gvl, &a, RUBY_UBF_IO, NULL);
-    if (!a.ok) raise_with(a.err);
+    (void)parse_envelope_freed(a.envelope);
     return Qnil;
 }
 

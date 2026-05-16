@@ -31,16 +31,16 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             let cur = stateLock.withLock { $0 }
             switch cur {
             case .poweredOn:    return nil
-            case .unauthorized: return .permission("Bluetooth permission denied. Open System Settings → Privacy & Security → Bluetooth and enable your terminal application.")
-            case .unsupported:  return .state("Bluetooth is not supported on this machine.")
-            case .poweredOff:   return .state("Bluetooth is off. Turn it on in Control Center / System Settings.")
-            case .resetting:    return .state("Bluetooth is resetting; try again.")
+            case .unauthorized: return .lib(domain: "closed", message: "Bluetooth permission denied. Open System Settings → Privacy & Security → Bluetooth and enable your terminal application.")
+            case .unsupported:  return .lib(domain: "closed", message: "Bluetooth is not supported on this machine.")
+            case .poweredOff:   return .lib(domain: "closed", message: "Bluetooth is off. Turn it on in Control Center / System Settings.")
+            case .resetting:    return .lib(domain: "closed", message: "Bluetooth is resetting; try again.")
             case .unknown:      break  // wait
             @unknown default:   break
             }
             let r = stateSem.wait(timeout: deadline)
             if r == .timedOut {
-                return .timeout("Bluetooth state did not reach poweredOn within \(timeoutMs)ms")
+                return .lib(domain: "timeout", message: "Bluetooth state did not reach poweredOn within \(timeoutMs)ms")
             }
         }
     }
@@ -71,14 +71,12 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return scanLock.withLock { Array($0.values) }
     }
 
-    func scanResultsAsJSON(_ results: [ScanResult]) -> String {
-        let arr: [[String: Any]] = results.map { r in
+    func scanResultsAsArray(_ results: [ScanResult]) -> [[String: Any]] {
+        return results.map { r in
             var d: [String: Any] = ["identifier": r.identifier, "rssi": r.rssi]
             if let n = r.name { d["name"] = n }
             return d
         }
-        let data = try! JSONSerialization.data(withJSONObject: arr)
-        return String(data: data, encoding: .utf8) ?? "[]"
     }
 
     // MARK: - CBCentralManagerDelegate
@@ -128,21 +126,21 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func connect(identifier: String, timeoutMs: Int32) -> CBMError? {
         guard let (p, d) = peripheral(identifier: identifier) else {
-            return .connection("Unknown peripheral identifier \(identifier); scan first.")
+            return .lib(domain: "connection", message: "Unknown peripheral identifier \(identifier); scan first.")
         }
         d.connectError = nil
         d.connected = false
         manager.connect(p, options: nil)
         let r = d.connectSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
-        if r == .timedOut { manager.cancelPeripheralConnection(p); return .timeout("connect timed out after \(timeoutMs)ms") }
-        if let e = d.connectError { return .connection(e.localizedDescription) }
-        if !d.connected { return .connection("connect signalled but state is not connected") }
+        if r == .timedOut { manager.cancelPeripheralConnection(p); return .lib(domain: "timeout", message: "connect timed out after \(timeoutMs)ms") }
+        if let e = d.connectError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
+        if !d.connected { return .lib(domain: "connection", message: "connect signalled but state is not connected") }
         return nil
     }
 
     func disconnect(identifier: String) -> CBMError? {
         guard let (p, _) = peripheral(identifier: identifier) else {
-            return .closed("Unknown peripheral identifier \(identifier).")
+            return .lib(domain: "closed", message: "Unknown peripheral identifier \(identifier).")
         }
         manager.cancelPeripheralConnection(p)
         return nil
@@ -161,14 +159,14 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func discoverServices(identifier: String, timeoutMs: Int32) -> Result<[String], CBMError> {
         guard let (p, d) = peripheral(identifier: identifier) else {
-            return .failure(.closed("Unknown peripheral \(identifier)"))
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
-        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         d.servicesError = nil
         p.discoverServices(nil)
         let r = d.servicesSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
-        if r == .timedOut { return .failure(.timeout("discoverServices timed out after \(timeoutMs)ms")) }
-        if let e = d.servicesError { return .failure(.discovery(e.localizedDescription)) }
+        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "discoverServices timed out after \(timeoutMs)ms")) }
+        if let e = d.servicesError { return .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
         let uuids = (p.services ?? []).map { $0.uuid.uuidString.lowercased() }
         return .success(uuids)
     }
@@ -177,20 +175,20 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         -> Result<[[String: Any]], CBMError>
     {
         guard let (p, d) = peripheral(identifier: identifier) else {
-            return .failure(.closed("Unknown peripheral \(identifier)"))
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
-        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         let targetUUID = CBUUID(string: serviceUUID)
         guard let service = (p.services ?? []).first(where: { $0.uuid == targetUUID }) else {
-            return .failure(.discovery("Service \(serviceUUID) not found on peripheral"))
+            return .failure(.lib(domain: "discovery", message: "Service \(serviceUUID) not found on peripheral"))
         }
         d.charsServiceUUID = targetUUID
         d.charsError = nil
         p.discoverCharacteristics(nil, for: service)
         let r = d.charsSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
         d.charsServiceUUID = nil
-        if r == .timedOut { return .failure(.timeout("discoverCharacteristics timed out after \(timeoutMs)ms")) }
-        if let e = d.charsError { return .failure(.discovery(e.localizedDescription)) }
+        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "discoverCharacteristics timed out after \(timeoutMs)ms")) }
+        if let e = d.charsError { return .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
         let arr: [[String: Any]] = (service.characteristics ?? []).map { ch in
             var props: [String] = []
             if ch.properties.contains(.read)                 { props.append("read") }
@@ -207,16 +205,16 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         -> Result<Data, CBMError>
     {
         guard let (p, d) = peripheral(identifier: identifier) else {
-            return .failure(.closed("Unknown peripheral \(identifier)"))
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
-        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         let svcId = CBUUID(string: serviceUUID)
         let chId  = CBUUID(string: charUUID)
         guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }) else {
-            return .failure(.discovery("Service \(serviceUUID) not discovered"))
+            return .failure(.lib(domain: "discovery", message: "Service \(serviceUUID) not discovered"))
         }
         guard let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
-            return .failure(.discovery("Characteristic \(charUUID) not discovered"))
+            return .failure(.lib(domain: "discovery", message: "Characteristic \(charUUID) not discovered"))
         }
         d.readCharUUID = chId
         d.readError = nil
@@ -224,20 +222,20 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         p.readValue(for: ch)
         let r = d.readSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
         d.readCharUUID = nil
-        if r == .timedOut { return .failure(.timeout("read timed out after \(timeoutMs)ms")) }
-        if let e = d.readError { return .failure(.io(e.localizedDescription)) }
+        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "read timed out after \(timeoutMs)ms")) }
+        if let e = d.readError { return .failure(CBMError.from(e as NSError, fallbackDomain: "connection")) }
         return .success(d.readValue ?? Data())
     }
 
     func writeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                               data: Data, withResponse: Bool, timeoutMs: Int32) -> CBMError? {
-        guard let (p, d) = peripheral(identifier: identifier) else { return .closed("Unknown peripheral \(identifier)") }
-        guard p.state == .connected else { return .connection("Peripheral not connected") }
+        guard let (p, d) = peripheral(identifier: identifier) else { return .lib(domain: "closed", message: "Unknown peripheral \(identifier)") }
+        guard p.state == .connected else { return .lib(domain: "connection", message: "Peripheral not connected") }
         let svcId = CBUUID(string: serviceUUID)
         let chId  = CBUUID(string: charUUID)
         guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
               let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
-            return .discovery("Service/characteristic not discovered")
+            return .lib(domain: "discovery", message: "Service/characteristic not discovered")
         }
         if withResponse {
             d.writeCharUUID = chId
@@ -245,8 +243,8 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             p.writeValue(data, for: ch, type: .withResponse)
             let r = d.writeSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
             d.writeCharUUID = nil
-            if r == .timedOut { return .timeout("write timed out after \(timeoutMs)ms") }
-            if let e = d.writeError { return .io(e.localizedDescription) }
+            if r == .timedOut { return .lib(domain: "timeout", message: "write timed out after \(timeoutMs)ms") }
+            if let e = d.writeError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
             return nil
         } else {
             // Best-effort. Optionally honor canSendWriteWithoutResponse.
@@ -286,42 +284,42 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func subscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                                   timeoutMs: Int32) -> Result<Int64, CBMError> {
-        guard let (p, d) = peripheral(identifier: identifier) else { return .failure(.closed("Unknown peripheral")) }
-        guard p.state == .connected else { return .failure(.connection("Peripheral not connected")) }
+        guard let (p, d) = peripheral(identifier: identifier) else { return .failure(.lib(domain: "closed", message: "Unknown peripheral")) }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         let svcId = CBUUID(string: serviceUUID)
         let chId  = CBUUID(string: charUUID)
         guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
               let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
-            return .failure(.discovery("Service/characteristic not discovered"))
+            return .failure(.lib(domain: "discovery", message: "Service/characteristic not discovered"))
         }
         d.notifyCharUUID = chId
         d.notifyError = nil
         p.setNotifyValue(true, for: ch)
         let r = d.notifySem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
         d.notifyCharUUID = nil
-        if r == .timedOut { return .failure(.timeout("subscribe timed out")) }
-        if let e = d.notifyError { return .failure(.io(e.localizedDescription)) }
+        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "subscribe timed out")) }
+        if let e = d.notifyError { return .failure(CBMError.from(e as NSError, fallbackDomain: "connection")) }
         let id = CBMSubscriptionRegistry.shared.register(central: self, characteristicUUID: chId)
         return .success(id)
     }
 
     func unsubscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                                     timeoutMs: Int32) -> CBMError? {
-        guard let (p, d) = peripheral(identifier: identifier) else { return .closed("Unknown peripheral") }
-        guard p.state == .connected else { return .connection("Peripheral not connected") }
+        guard let (p, d) = peripheral(identifier: identifier) else { return .lib(domain: "closed", message: "Unknown peripheral") }
+        guard p.state == .connected else { return .lib(domain: "connection", message: "Peripheral not connected") }
         let svcId = CBUUID(string: serviceUUID)
         let chId  = CBUUID(string: charUUID)
         guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }),
               let ch  = (svc.characteristics ?? []).first(where: { $0.uuid == chId }) else {
-            return .discovery("Service/characteristic not discovered")
+            return .lib(domain: "discovery", message: "Service/characteristic not discovered")
         }
         d.notifyCharUUID = chId
         d.notifyError = nil
         p.setNotifyValue(false, for: ch)
         let r = d.notifySem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
         d.notifyCharUUID = nil
-        if r == .timedOut { return .timeout("unsubscribe timed out") }
-        if let e = d.notifyError { return .io(e.localizedDescription) }
+        if r == .timedOut { return .lib(domain: "timeout", message: "unsubscribe timed out") }
+        if let e = d.notifyError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
         // Close all subscriptions matching this characteristic UUID under this central.
         CBMSubscriptionRegistry.shared.purgeAll(under: self) // simpler than per-char; safe for Phase 2 single-subscription cases
         return nil
