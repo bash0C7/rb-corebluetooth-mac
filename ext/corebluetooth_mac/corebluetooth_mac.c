@@ -405,6 +405,31 @@ static VALUE rb_peripheral_last_disconnect_error(VALUE self, VALUE id_v) {
     return parse_envelope_freed(env);
 }
 
+struct poll_events_args {
+    void *p; const char *id; int32_t timeout_ms;
+    char *envelope;
+};
+
+static void *poll_events_no_gvl(void *data) {
+    struct poll_events_args *a = (struct poll_events_args *)data;
+    a->envelope = cbm_peripheral_poll_events(a->p, a->id, a->timeout_ms);
+    return NULL;
+}
+
+static VALUE rb_peripheral_poll_events(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct poll_events_args a = {
+        p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), NULL
+    };
+    // Drop GVL while waiting on the per-peripheral event semaphore so Ruby
+    // threads can run during blocking polls (same pattern as read/connect).
+    rb_thread_call_without_gvl(poll_events_no_gvl, &a, RUBY_UBF_IO, NULL);
+    // Returns nil (timeout) or {"tag" => ..., "payload" => ...}.
+    return parse_envelope_freed(a.envelope);
+}
+
 struct subscribe_args {
     void *p; const char *id; const char *svc; const char *ch;
     int32_t timeout_ms; char *envelope;
@@ -608,6 +633,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
     rb_define_method(cNative, "peripheral_state",                rb_peripheral_state,                1);
     rb_define_method(cNative, "peripheral_last_disconnect_error", rb_peripheral_last_disconnect_error, 1);
+    rb_define_method(cNative, "peripheral_poll_events",           rb_peripheral_poll_events,           2);
     rb_define_method(cNative, "peripheral_read_rssi",             rb_peripheral_read_rssi,             2);
     rb_define_method(cNative, "peripheral_max_write_length",      rb_peripheral_max_write_length,      2);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);

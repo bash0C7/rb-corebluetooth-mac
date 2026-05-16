@@ -65,6 +65,38 @@ module CoreBluetoothMac
       @central.__call_native(:peripheral_max_write_length, @identifier, response ? 1 : 0)
     end
 
+    # Drain one event from the per-peripheral event queue. Returns nil if no
+    # event arrived within `timeout` seconds. Otherwise returns a
+    # `CoreBluetoothMac::PeripheralEvent::*` Data instance.
+    #
+    # Events:
+    #   NameUpdated(name:)            — peripheralDidUpdateName:
+    #   ServicesInvalidated(uuids:)   — peripheral:didModifyServices:
+    #   Disconnected(error:)          — centralManager:didDisconnectPeripheral:error:
+    #
+    # The queue is cumulative across polls; callers loop to drain.
+    def poll_events(timeout: 0.0)
+      json = @central.__call_native(:peripheral_poll_events, @identifier, (timeout * 1000).to_i)
+      # `__call_native` returns the envelope `data` field, so `json` is either
+      # nil (timeout / unknown peripheral) or `{"tag"=>..., "payload"=>...}`.
+      return nil if json.nil?
+      case json["tag"]
+      when "name_updated"
+        PeripheralEvent::NameUpdated.new(name: json["payload"]["name"])
+      when "services_invalidated"
+        PeripheralEvent::ServicesInvalidated.new(uuids: json["payload"]["uuids"])
+      when "disconnected"
+        err_payload = json["payload"]["error"]
+        err = err_payload && Error.new(
+          err_payload["message"],
+          domain: err_payload["domain"].to_sym,
+          code: err_payload["code"],
+          code_name: err_payload["code_name"]&.to_sym
+        )
+        PeripheralEvent::Disconnected.new(error: err)
+      end
+    end
+
     def find_characteristic(uuid)
       target = uuid.downcase
       (@services || []).each do |svc|

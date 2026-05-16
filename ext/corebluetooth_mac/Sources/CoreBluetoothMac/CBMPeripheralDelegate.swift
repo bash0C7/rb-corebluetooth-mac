@@ -2,6 +2,26 @@ import Foundation
 @preconcurrency import CoreBluetooth
 import os
 
+// Tags emitted to the Ruby side via the event queue. `rawValue` is the
+// snake_case string the Ruby `Peripheral#poll_events` dispatcher matches on
+// (handoff §4.1 — Ruby idiom + envelope JSON convention).
+enum PeripheralEventTag: String {
+    case nameUpdated         = "name_updated"
+    case servicesInvalidated = "services_invalidated"
+    case disconnected        = "disconnected"
+}
+
+// State held inside the typed lock. Bound semaphore lives alongside the queue
+// so producer/consumer share both atomically.
+// `@unchecked Sendable` because the queue stores `[String: Any]` payloads
+// (Apple SDK types — NSNull, etc.) which aren't statically Sendable. All
+// mutation goes through OSAllocatedUnfairLock<PeripheralEventState> so this
+// is safe (mirrors the @unchecked Sendable pattern on CBMPeripheralDelegate itself).
+struct PeripheralEventState: @unchecked Sendable {
+    var queue: [(tag: PeripheralEventTag, payload: [String: Any])] = []
+    let sem = DispatchSemaphore(value: 0)
+}
+
 final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Sendable {
     let peripheral: CBPeripheral
 
@@ -62,6 +82,44 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     // Disconnect error (populated by centralManager(_:didDisconnectPeripheral:error:))
     let lastDisconnectInfo = OSAllocatedUnfairLock<NSError?>(initialState: nil)
 
+    // Event queue (name_updated / services_invalidated / disconnected) drained
+    // by `cbm_peripheral_poll_events`. Typed lock + bound DispatchSemaphore for
+    // bounded-wait dequeue. Bound is 256; older events are dropped on overflow.
+    let events = OSAllocatedUnfairLock<PeripheralEventState>(initialState: PeripheralEventState())
+
+    func pushEvent(tag: PeripheralEventTag, payload: [String: Any]) {
+        // Box the payload because `[String: Any]` (Apple SDK NSNull / NSError
+        // hash values) is not Sendable; the typed lock's withLock closure
+        // requires a Sendable return. Box<T> is the project's @unchecked
+        // Sendable wrapper (see CBMSync.swift).
+        let payloadBox = Box(payload)
+        let sem: DispatchSemaphore = events.withLock { state in
+            state.queue.append((tag: tag, payload: payloadBox.value))
+            if state.queue.count > 256 { state.queue.removeFirst() }  // drop oldest on overflow
+            return state.sem
+        }
+        sem.signal()
+    }
+
+    func pollEvent(timeoutMs: Int32) -> (tag: String, payload: [String: Any])? {
+        // Fast path: already-queued event, no wait. Return a Box from inside
+        // the lock to satisfy Sendable; unwrap outside the closure.
+        let fastPath: Box<(PeripheralEventTag, [String: Any])>? = events.withLock { state in
+            state.queue.isEmpty ? nil : Box(state.queue.removeFirst())
+        }
+        if let immediate = fastPath {
+            return (immediate.value.0.rawValue, immediate.value.1)
+        }
+        let sem = events.withLock { $0.sem }
+        let r = sem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        if r == .timedOut { return nil }
+        let waited: Box<(PeripheralEventTag, [String: Any])>? = events.withLock { state in
+            state.queue.isEmpty ? nil : Box(state.queue.removeFirst())
+        }
+        guard let e = waited else { return nil }
+        return (e.value.0.rawValue, e.value.1)
+    }
+
     init(peripheral: CBPeripheral) {
         self.peripheral = peripheral
         super.init()
@@ -69,6 +127,21 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     }
 
     // MARK: CBPeripheralDelegate
+
+    // CBPeripheralDelegate `peripheralDidUpdateName:` — Apple SDK
+    // CBPeripheral.h L282. Pushes a `name_updated` event with the new name
+    // (empty string if peripheral.name is nil — payload key always present).
+    func peripheralDidUpdateName(_ p: CBPeripheral) {
+        pushEvent(tag: .nameUpdated, payload: ["name": p.name ?? ""])
+    }
+
+    // CBPeripheralDelegate `peripheral:didModifyServices:` — Apple SDK
+    // CBPeripheral.h L294. Pushes a `services_invalidated` event carrying the
+    // lowercased UUID strings of the invalidated services.
+    func peripheral(_ p: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        let uuids = invalidatedServices.map { $0.uuid.uuidString.lowercased() }
+        pushEvent(tag: .servicesInvalidated, payload: ["uuids": uuids])
+    }
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         servicesError = error

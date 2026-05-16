@@ -265,6 +265,26 @@ public func cbm_peripheral_last_disconnect_error(
 }
 
 @c
+public func cbm_peripheral_poll_events(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ timeout_ms: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    // Timeout / unknown identifier → ok-envelope with data=null. Ruby
+    // `Peripheral#poll_events` treats nil as "no event ready".
+    guard let ev = c.pollPeripheralEvents(
+        identifier: String(cString: identifier),
+        timeoutMs: timeout_ms
+    ) else {
+        return strdup(CBMEnvelope.ok(nil))
+    }
+    // Event payload shape: {"tag": "<snake_case>", "payload": {...}}.
+    let data: [String: Any] = ["tag": ev.tag, "payload": ev.payload]
+    return strdup(CBMEnvelope.ok(data))
+}
+
+@c
 public func cbm_peripheral_max_write_length(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,

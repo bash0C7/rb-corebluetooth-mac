@@ -401,6 +401,19 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
                 if $0 == nil { $0 = .failure(.lib(domain: "connection", message: "Peripheral disconnected")) }
             }
             d.descriptorWriteSem.signal()
+
+            // Task 13: push a `disconnected` event onto the per-peripheral event queue.
+            // This runs AFTER lastDisconnectInfo (Task 9) and in-flight op fail-fast
+            // (Task 10/12) so existing paths continue to win the race and don't see a
+            // stale event queue. Payload mirrors the `last_disconnect_error` envelope:
+            // null for clean disconnect, or a CBMError-shaped error hash.
+            let errorPayload: Any
+            if let e = error {
+                errorPayload = CBMError.from(e as NSError, fallbackDomain: "connection").json
+            } else {
+                errorPayload = NSNull()
+            }
+            d.pushEvent(tag: .disconnected, payload: ["error": errorPayload])
         }
     }
 
@@ -435,6 +448,16 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }
         return d.lastDisconnectInfo.withLock { $0 }
+    }
+
+    // Task 13: drain one event from the per-peripheral queue. Returns nil on
+    // timeout or unknown identifier (caller surfaces both as ok-envelope/null).
+    func pollPeripheralEvents(identifier: String, timeoutMs: Int32)
+        -> (tag: String, payload: [String: Any])?
+    {
+        guard let uuid = UUID(uuidString: identifier),
+              let d = delegate(for: uuid) else { return nil }
+        return d.pollEvent(timeoutMs: timeoutMs)
     }
 
     // MARK: - Private helpers
