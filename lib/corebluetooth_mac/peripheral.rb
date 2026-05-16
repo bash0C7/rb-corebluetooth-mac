@@ -77,8 +77,10 @@ module CoreBluetoothMac
     # The queue is cumulative across polls; callers loop to drain.
     def poll_events(timeout: 0.0)
       json = @central.__call_native(:peripheral_poll_events, @identifier, (timeout * 1000).to_i)
-      # `__call_native` returns the envelope `data` field, so `json` is either
-      # nil (timeout / unknown peripheral) or `{"tag"=>..., "payload"=>...}`.
+      # `__call_native` returns the envelope `data` field: nil (timeout) or
+      # `{"tag"=>..., "payload"=>...}` (event). Closed Central or unknown
+      # peripheral raise Error(:closed) / Error(:validation) before reaching
+      # here via the envelope error path.
       return nil if json.nil?
       case json["tag"]
       when "name_updated"

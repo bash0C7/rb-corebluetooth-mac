@@ -60,8 +60,9 @@ module CoreBluetoothMac
       when :peripheral_last_disconnect_error
         @native.peripheral_last_disconnect_error(*args)
       when :peripheral_poll_events
-        # args: (identifier, timeout_ms). Returns nil on timeout or
-        # `{"tag"=>..., "payload"=>...}` (envelope data field).
+        # args: (identifier, timeout_ms). Returns nil on timeout, or
+        # `{"tag"=>..., "payload"=>...}` (envelope data field). Closed Central /
+        # unknown peripheral surface as envelope errors → Error(:closed|:validation).
         @native.peripheral_poll_events(*args)
       when :peripheral_read_rssi
         @native.peripheral_read_rssi(*args)

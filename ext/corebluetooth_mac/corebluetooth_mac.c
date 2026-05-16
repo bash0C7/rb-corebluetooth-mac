@@ -436,7 +436,8 @@ static VALUE rb_peripheral_poll_events(VALUE self, VALUE id_v, VALUE timeout_ms_
     // Drop GVL while waiting on the per-peripheral event semaphore so Ruby
     // threads can run during blocking polls (same pattern as read/connect).
     rb_thread_call_without_gvl(poll_events_no_gvl, &a, RUBY_UBF_IO, NULL);
-    // Returns nil (timeout) or {"tag" => ..., "payload" => ...}.
+    // ok envelope: nil (timeout) or {"tag" => ..., "payload" => ...}.
+    // err envelope: domain "closed" (Central#close) / "validation" (unknown peripheral).
     return parse_envelope_freed(a.envelope);
 }
 
