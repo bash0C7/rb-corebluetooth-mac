@@ -58,6 +58,8 @@ module CoreBluetoothMac
         @native.peripheral_last_disconnect_error(*args)
       when :peripheral_read_rssi
         @native.peripheral_read_rssi(*args)
+      when :peripheral_max_write_length
+        @native.peripheral_max_write_length(*args)
       when :peripheral_discover_services
         # args: (identifier, services_filter_json_or_nil, timeout_ms)
         # C bridge returns the already-parsed array of `{uuid, is_primary}` hashes.

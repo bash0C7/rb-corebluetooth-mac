@@ -409,6 +409,14 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return .failure(.lib(domain: "discovery", message: "RSSI result missing"))
     }
 
+    func maxWriteLength(identifier: String, withResponse: Bool) -> Result<Int, CBMError> {
+        guard let (p, _) = peripheral(identifier: identifier) else {
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
+        }
+        let type: CBCharacteristicWriteType = withResponse ? .withResponse : .withoutResponse
+        return .success(p.maximumWriteValueLength(for: type))
+    }
+
     func lastDisconnectError(identifier: String) -> NSError? {
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }

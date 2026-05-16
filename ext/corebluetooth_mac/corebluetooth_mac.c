@@ -389,6 +389,14 @@ static VALUE rb_peripheral_read_rssi(VALUE self, VALUE id_v, VALUE timeout_ms_v)
     return parse_envelope_freed(a.envelope);
 }
 
+static VALUE rb_peripheral_max_write_length(VALUE self, VALUE id_v, VALUE with_response_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(with_response_v, T_FIXNUM);
+    char *env = cbm_peripheral_max_write_length(p, StringValueCStr(id_v), (int32_t)NUM2INT(with_response_v));
+    return parse_envelope_freed(env);
+}
+
 static VALUE rb_peripheral_last_disconnect_error(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
@@ -507,6 +515,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "peripheral_state",                rb_peripheral_state,                1);
     rb_define_method(cNative, "peripheral_last_disconnect_error", rb_peripheral_last_disconnect_error, 1);
     rb_define_method(cNative, "peripheral_read_rssi",             rb_peripheral_read_rssi,             2);
+    rb_define_method(cNative, "peripheral_max_write_length",      rb_peripheral_max_write_length,      2);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);
     rb_define_method(cNative, "discover_characteristics",        rb_service_discover_characteristics,        3);
     rb_define_method(cNative, "discover_included_services",      rb_service_discover_included_services,      3);

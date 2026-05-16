@@ -61,6 +61,10 @@ module CoreBluetoothMac
       @central.__call_native(:peripheral_read_rssi, @identifier, (timeout * 1000).to_i)
     end
 
+    def max_write_length(response: true)
+      @central.__call_native(:peripheral_max_write_length, @identifier, response ? 1 : 0)
+    end
+
     def find_characteristic(uuid)
       target = uuid.downcase
       (@services || []).each do |svc|

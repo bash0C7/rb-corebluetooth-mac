@@ -265,6 +265,21 @@ public func cbm_peripheral_last_disconnect_error(
 }
 
 @c
+public func cbm_peripheral_max_write_length(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ with_response: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.maxWriteLength(identifier: String(cString: identifier), withResponse: with_response != 0) {
+    case .success(let n):
+        return strdup(CBMEnvelope.ok(NSNumber(value: n)))
+    case .failure(let err):
+        return strdup(CBMEnvelope.err(err))
+    }
+}
+
+@c
 public func cbm_characteristic_subscribe(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,
