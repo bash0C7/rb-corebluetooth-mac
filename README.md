@@ -5,7 +5,7 @@ Apple CoreBluetooth (BLE central) for Ruby on macOS via Swift native extension.
 ## Requirements
 
 - macOS 13+ (Bluetooth permission prompt requires this; `OSAllocatedUnfairLock` in the Swift extension requires macOS 13)
-- Ruby (CRuby/MRI) ≥ 3.2 (development pins 4.0.3 via `.ruby-version`)
+- Ruby (CRuby/MRI) ≥ 3.2 (no `.ruby-version` shipped — the consumer's Ruby is used)
 - Swift 6.3+ (recommended installer: [swiftly](https://www.swift.org/install/macos/))
 - A Bluetooth-capable Mac with permission granted to the terminal app
 
@@ -27,7 +27,7 @@ The Swift native extension is built via `swift build` at install time. Xcode is 
 
 If you wire the gem via `gem 'rb-corebluetooth-mac', path: '...'` instead of installing the published gem, Bundler skips the `extconf.rb` step and the prebuilt `lib/corebluetooth_mac/corebluetooth_mac.bundle` shipped in the repo is used as-is. Two consequences:
 
-1. **Pin your consumer to Ruby 4.0.3** (matches this gem's own `.ruby-version`) so the prebuilt native ext binds against the same `libruby` ABI. Mismatch surfaces at load time as `LoadError: linked to incompatible /Users/.../libruby.X.Y.dylib`. To rebuild for a different Ruby, run `bundle exec rake compile` in this repo with the matching Ruby active.
+1. **The prebuilt `lib/corebluetooth_mac/corebluetooth_mac.bundle` is linked against whichever Ruby ABI last ran `rake compile` in this repo.** If your consumer's Ruby ABI does not match, load fails with `LoadError: linked to incompatible /Users/.../libruby.X.Y.dylib`. Run `bundle exec rake compile` in this repo with your consumer's Ruby active to rebuild the bundle for that ABI. (As a library, this gem does not ship a `.ruby-version` — the consumer chooses the Ruby.)
 2. **Add `swift_gem` to your Gemfile as a path/git entry too**, because it is a runtime dependency that is not (yet) published to rubygems.org:
    ```ruby
    gem 'swift_gem', path: '/path/to/swift_gem'
