@@ -24,3 +24,6 @@ lib/**/*.bundle.dSYM/
 
 # Claude Code per-user settings
 .claude/settings.local.json
+
+# Session memory / working docs (private to local Claude Code; CLAUDE.md is the canonical norm)
+docs/superpowers/
