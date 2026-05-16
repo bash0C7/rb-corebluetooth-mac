@@ -455,6 +455,10 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     func pollPeripheralEvents(identifier: String, timeoutMs: Int32)
         -> (tag: String, payload: [String: Any])?
     {
+        // TODO(Task 15): An unknown identifier currently returns nil, which Ruby reads as a
+        // timeout from the JSON envelope. After Central#close lands, this should distinguish
+        // "peripheral not tracked" from "no event yet" — likely via a `:closed`/`:not_found`
+        // error domain rather than the timeout-shaped success envelope.
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }
         return d.pollEvent(timeoutMs: timeoutMs)

@@ -94,6 +94,8 @@ module CoreBluetoothMac
           code_name: err_payload["code_name"]&.to_sym
         )
         PeripheralEvent::Disconnected.new(error: err)
+      else
+        raise Error.new("unknown peripheral event tag: #{json["tag"].inspect}", domain: :validation)
       end
     end
 

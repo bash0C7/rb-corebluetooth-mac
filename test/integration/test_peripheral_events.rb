@@ -17,6 +17,7 @@ class TestPeripheralEvents < Test::Unit::TestCase
     central.disconnect(p)
     ev = p.poll_events(timeout: 5.0)
     assert_kind_of CoreBluetoothMac::PeripheralEvent::Disconnected, ev
+    assert_nil ev.error, "clean disconnect should carry nil error"
   ensure
     central&.close
   end

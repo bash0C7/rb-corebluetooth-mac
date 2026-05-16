@@ -93,12 +93,17 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
         // requires a Sendable return. Box<T> is the project's @unchecked
         // Sendable wrapper (see CBMSync.swift).
         let payloadBox = Box(payload)
-        let sem: DispatchSemaphore = events.withLock { state in
+        let signalSem: DispatchSemaphore? = events.withLock { state in
+            let isOverflow = state.queue.count >= 256
+            if isOverflow { state.queue.removeFirst() }  // drop oldest on overflow
             state.queue.append((tag: tag, payload: payloadBox.value))
-            if state.queue.count > 256 { state.queue.removeFirst() }  // drop oldest on overflow
-            return state.sem
+            // Only signal when net-adding (overflow drops one, adds one → net 0 → don't signal).
+            // Keeps invariant: sem.count == queue.count. Otherwise phantom signals
+            // accumulate and pollEvent's post-wait re-dequeue returns nil, which the
+            // Ruby caller misreads as a timeout.
+            return isOverflow ? nil : state.sem
         }
-        sem.signal()
+        signalSem?.signal()
     }
 
     func pollEvent(timeoutMs: Int32) -> (tag: String, payload: [String: Any])? {
