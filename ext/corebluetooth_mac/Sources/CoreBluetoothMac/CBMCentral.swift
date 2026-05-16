@@ -49,6 +49,13 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         let identifier: String
         let name: String?
         let rssi: Int
+        let txPowerLevel: Int?
+        let isConnectable: Bool?
+        let serviceUUIDs: [String]
+        let serviceData: [String: String]   // UUID (lc) → hex
+        let manufacturerData: String?        // hex
+        let solicitedServiceUUIDs: [String]
+        let overflowServiceUUIDs: [String]
     }
 
     // All mutable state lives inside its lock to satisfy Swift 6 strict-concurrency
@@ -73,10 +80,25 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
     func scanResultsAsArray(_ results: [ScanResult]) -> [[String: Any]] {
         return results.map { r in
-            var d: [String: Any] = ["identifier": r.identifier, "rssi": r.rssi]
-            if let n = r.name { d["name"] = n }
+            let d: [String: Any] = [
+                "identifier": r.identifier,
+                "name": r.name ?? NSNull(),
+                "rssi": r.rssi,
+                "tx_power_level": r.txPowerLevel ?? NSNull(),
+                "connectable": r.isConnectable ?? NSNull(),
+                "service_uuids": r.serviceUUIDs,
+                "service_data": r.serviceData,
+                "manufacturer_data": r.manufacturerData ?? NSNull(),
+                "solicited_service_uuids": r.solicitedServiceUUIDs,
+                "overflow_service_uuids": r.overflowServiceUUIDs,
+            ]
             return d
         }
+    }
+
+    // Hex-encode a `Data` blob to a lowercase hex string (no separators).
+    private static func hexEncode(_ data: Data) -> String {
+        return data.map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - CBCentralManagerDelegate
@@ -101,7 +123,43 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
                 state[peripheral.identifier] = peripheral
             }
         }
-        let r = ScanResult(identifier: peripheral.identifier.uuidString, name: name, rssi: RSSI.intValue)
+
+        // Parse the 8 documented advertisement-data keys.
+        // Source: <CoreBluetooth/CBAdvertisementData.h> in MacOSX.sdk.
+        let txPower: Int? = (advertisementData[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue
+        let isConnectable: Bool? = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue
+
+        let serviceUUIDs: [String] = ((advertisementData[CBAdvertisementDataServiceUUIDsKey]
+            as? [CBUUID]) ?? []).map { $0.uuidString.lowercased() }
+
+        let solicitedUUIDs: [String] = ((advertisementData[CBAdvertisementDataSolicitedServiceUUIDsKey]
+            as? [CBUUID]) ?? []).map { $0.uuidString.lowercased() }
+
+        let overflowUUIDs: [String] = ((advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey]
+            as? [CBUUID]) ?? []).map { $0.uuidString.lowercased() }
+
+        var serviceData: [String: String] = [:]
+        if let raw = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] {
+            for (uuid, data) in raw {
+                serviceData[uuid.uuidString.lowercased()] = Self.hexEncode(data)
+            }
+        }
+
+        let manufacturerData: String? = (advertisementData[CBAdvertisementDataManufacturerDataKey]
+            as? Data).map { Self.hexEncode($0) }
+
+        let r = ScanResult(
+            identifier: peripheral.identifier.uuidString,
+            name: name,
+            rssi: RSSI.intValue,
+            txPowerLevel: txPower,
+            isConnectable: isConnectable,
+            serviceUUIDs: serviceUUIDs,
+            serviceData: serviceData,
+            manufacturerData: manufacturerData,
+            solicitedServiceUUIDs: solicitedUUIDs,
+            overflowServiceUUIDs: overflowUUIDs,
+        )
         scanLock.withLock { $0[peripheral.identifier.uuidString] = r }
     }
 
