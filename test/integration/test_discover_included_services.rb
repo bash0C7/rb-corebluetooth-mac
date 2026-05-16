@@ -18,6 +18,6 @@ class TestDiscoverIncludedServices < Test::Unit::TestCase
     assert_kind_of Array, included
     included.each { |s| assert_kind_of CoreBluetoothMac::Service, s }
   ensure
-    central&.close rescue nil
+    central&.close
   end
 end
