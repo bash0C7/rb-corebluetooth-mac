@@ -11,7 +11,7 @@ module CoreBluetoothMac
     end
 
     def read(timeout: 5.0)
-      @value = characteristic.service.peripheral.central.__call_native(
+      @value = central.__call_native(
         :descriptor_read,
         characteristic.service.peripheral.identifier,
         characteristic.service.uuid,
@@ -22,7 +22,7 @@ module CoreBluetoothMac
     end
 
     def write(data, timeout: 5.0)
-      characteristic.service.peripheral.central.__call_native(
+      central.__call_native(
         :descriptor_write,
         characteristic.service.peripheral.identifier,
         characteristic.service.uuid,
@@ -33,6 +33,12 @@ module CoreBluetoothMac
       )
       @value = data.to_s.b
       true
+    end
+
+    private
+
+    def central
+      characteristic.service.peripheral.central
     end
   end
 end

@@ -26,6 +26,8 @@ class DiscoverDescriptorsTest < Test::Unit::TestCase
     notify_ch.discover_descriptors(timeout: 5.0)
     assert_kind_of Array, notify_ch.descriptors
     notify_ch.descriptors.each { |d| assert_kind_of CoreBluetoothMac::Descriptor, d }
+    cccd = notify_ch.descriptors.find { |d| d.uuid.downcase.include?("2902") }
+    assert cccd, "expected CCCD descriptor after subscribe"
   ensure
     notify_ch&.unsubscribe if notify_ch
   end
