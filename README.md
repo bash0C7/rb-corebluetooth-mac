@@ -179,34 +179,6 @@ end
 - BLE central role only; no `CBPeripheralManager` (peripheral / advertising) support.
 - macOS only; not iOS / iPadOS / Linux.
 
-## Upgrading from v0.2.0
-
-v0.2.1 is a full rewrite of the omitted-data surface. There are **no shims**; user code from v0.2.0 must be migrated one-to-one:
-
-**Removed (breaking)**
-
-- `Characteristic#readable?` / `#writable?` / `#notifiable?` → use `#supports?(:read)` / `#supports?(:write)` / `#supports?(:notify)`. `#supports?` also covers `:write_without_response`, `:indicate`, `:authenticated_signed_writes`, `:broadcast`, `:extended_properties`, `:notify_encryption_required`, `:indicate_encryption_required`.
-- `Service#primary?` → use the `#is_primary` attribute.
-- `CoreBluetoothMac::TimeoutError`, `ClosedError`, `ConnectionError`, `DiscoveryError`, `PermissionError`, `StateError`, `IOError` → all merged into the single `CoreBluetoothMac::Error` class. Rescue by `#domain` symbol.
-- Native errors are no longer wrapped in `RuntimeError`-ish form — every raised error carries `#domain`, `#code`, and `#code_name`.
-
-**Changed shapes**
-
-- `DiscoveredDevice` `Data.define` members reordered (identity → signal → ad-data → central). Construct positionally only at your peril; use keyword construction or accessor access.
-- `Peripheral#discover_services` gains a `services:` keyword (filter). The default `services: nil` keeps the v0.2.0 "discover all" behavior, but the signature changed.
-
-**New (additive)**
-
-- `Central#close` — explicit teardown. Subsequent operations raise `Error(domain: :closed)`. Call this in an `ensure` block.
-- `Peripheral#read_rssi(timeout:)` — readRSSI.
-- `Peripheral#max_write_length(response:)` — `maximumWriteValueLength(for:)` for both response / no-response writes.
-- `Peripheral#poll_events(timeout:)` — drain `PeripheralEvent::{NameUpdated, ServicesInvalidated, Disconnected}`.
-- `Peripheral#last_disconnect_error` — the `Error` from the most recent disconnect, or `nil`.
-- `Characteristic#discover_descriptors(timeout:)` + `Descriptor` class with `#read` / `#write`.
-- `Service#discover_included_services(timeout:)`.
-
-JSON wire format between Ruby and the Swift extension is internal and not user-visible.
-
 ## License
 
 MIT
