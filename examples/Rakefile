@@ -1,0 +1,181 @@
+# frozen_string_literal: true
+
+require_relative "../lib/corebluetooth_mac"
+
+# Shared helpers ---------------------------------------------------------------
+
+GAP_SERVICE      = "00001800-0000-1000-8000-00805f9b34fb"
+DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
+NUS_TX_CHAR      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
+def hex_or_nil(bin)
+  bin && !bin.empty? ? bin.unpack1("H*") : "nil"
+end
+
+def scan_first(central, name)
+  devs = central.scan(name: name, timeout: 8.0)
+  abort "no peripheral matched name=#{name.inspect}" if devs.empty?
+  devs.first
+end
+
+namespace :examples do
+  desc "# columns: identifier  rssi  name  connectable  | scan all (no filter) or by Local Name; name=ARG"
+  task :scan, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    c.scan(name: args[:name], timeout: 5.0).each do |d|
+      puts "%s  %4d  %-20s  %s" % [d.identifier, d.rssi, d.name.inspect, d.connectable.inspect]
+    end
+  ensure
+    c&.close
+  end
+
+  desc "# columns: identifier rssi name svc_uuids manuf(hex) svc_data tx_pwr connectable solicited overflow | full ad-data dump"
+  task :scan_verbose, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    c.scan(name: args[:name], timeout: 5.0).each { |d| puts d.to_h.inspect }
+  ensure
+    c&.close
+  end
+
+  desc "# columns: device_name | scan, connect, read GAP Device Name; name=ARG"
+  task :connect_and_read, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    p.discover_services
+    gap = p.find_service(GAP_SERVICE) || abort("GAP service missing")
+    gap.discover_characteristics
+    ch = gap.find_characteristic(DEVICE_NAME_CHAR) || abort("Device Name characteristic missing")
+    puts ch.read(timeout: 5.0).force_encoding("UTF-8")
+  ensure
+    c&.close
+  end
+
+  desc "# columns: service_uuid is_primary char_uuid properties initial_value descriptor_uuid | full GATT tree dump"
+  task :discover_tree, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    p.discover_services
+    p.services.each do |svc|
+      puts "SERVICE\t#{svc.uuid}\t#{svc.is_primary}"
+      svc.discover_characteristics(timeout: 5.0)
+      svc.characteristics.each do |ch|
+        props_csv = ch.properties.to_a.join(",")
+        init_hex = hex_or_nil(ch.initial_value)
+        puts "  CHAR\t#{ch.uuid}\t#{props_csv}\t#{init_hex}"
+        descs =
+          begin
+            ch.discover_descriptors(timeout: 5.0)
+          rescue CoreBluetoothMac::Error => e
+            puts "    DESC_ERROR\t#{e.message}"
+            []
+          end
+        descs.each do |d|
+          val =
+            begin
+              d.read(timeout: 2.0)
+            rescue CoreBluetoothMac::Error => e
+              puts "    DESC_READ_ERROR\t#{d.uuid}\t#{e.message}"
+              nil
+            end
+          puts "    DESC\t#{d.uuid}\t#{hex_or_nil(val)}"
+        end
+      end
+    end
+  ensure
+    c&.close
+  end
+
+  desc "# columns: rssi_dbm | connect then readRSSI x5 @ 1s intervals; name=ARG"
+  task :rssi, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    5.times do
+      puts p.read_rssi(timeout: 2.0)
+      sleep 1
+    end
+  ensure
+    c&.close
+  end
+
+  desc "# columns: with_response without_response | print max write lengths; name=ARG"
+  task :max_write, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    puts "with_response=#{p.max_write_length(response: true)}  without_response=#{p.max_write_length(response: false)}"
+  ensure
+    c&.close
+  end
+
+  desc "# columns: rx_bytes(hex) | subscribe + Ractor pump 10s; name=ARG, char_uuid=ARG"
+  task :subscribe, [:name, :char_uuid] do |_, args|
+    char_uuid = args[:char_uuid] || NUS_TX_CHAR
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    p.discover_services
+    p.services.each(&:discover_characteristics)
+    ch = p.find_characteristic(char_uuid) || abort("characteristic #{char_uuid} missing")
+    sub = ch.subscribe
+    pump = Ractor.new(sub) do |s|
+      10.times do
+        v = s.next_value(timeout: 1.0)
+        break if v.nil? || v == false
+        Ractor.yield v.bytes.inspect
+      end
+      :done
+    end
+    loop do
+      msg = pump.take
+      break if msg == :done
+      puts msg
+    end
+    ch.unsubscribe
+  ensure
+    c&.close
+  end
+
+  desc "# columns: descriptor_uuid value(hex) | discover and read descriptors; name=ARG, char_uuid=ARG"
+  task :descriptors, [:name, :char_uuid] do |_, args|
+    char_uuid = args[:char_uuid] || abort("char_uuid=ARG is required")
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    p.discover_services
+    p.services.each(&:discover_characteristics)
+    ch = p.find_characteristic(char_uuid) || abort("characteristic #{char_uuid} missing")
+    descs = ch.discover_descriptors(timeout: 5.0)
+    descs.each do |d|
+      v = d.read(timeout: 2.0)
+      puts "%s\t%s" % [d.uuid, hex_or_nil(v)]
+    end
+  ensure
+    c&.close
+  end
+
+  desc "# columns: event_tag payload | connect and poll_events for 30s; name=ARG"
+  task :events, [:name] do |_, args|
+    c = CoreBluetoothMac::Central.new(state_timeout: 5.0)
+    dev = scan_first(c, args[:name])
+    p = c.connect(dev, timeout: 5.0)
+    deadline = Time.now + 30
+    while Time.now < deadline
+      ev = p.poll_events(timeout: 1.0)
+      next if ev.nil?
+      case ev
+      when CoreBluetoothMac::PeripheralEvent::NameUpdated
+        puts "name_updated\t#{ev.name.inspect}"
+      when CoreBluetoothMac::PeripheralEvent::ServicesInvalidated
+        puts "services_invalidated\t#{ev.uuids.inspect}"
+      when CoreBluetoothMac::PeripheralEvent::Disconnected
+        puts "disconnected\t#{ev.error&.message.inspect}"
+        break
+      end
+    end
+  ensure
+    c&.close
+  end
+end
