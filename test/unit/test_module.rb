@@ -10,6 +10,10 @@ class ModuleTest < Test::Unit::TestCase
   def test_VERSION_is_semver
     assert_match(/\A\d+\.\d+\.\d+(\.[a-z]\w*)?\z/, CoreBluetoothMac::VERSION)
   end
+
+  def test_VERSION_is_0_2_1
+    assert_equal "0.2.1", CoreBluetoothMac::VERSION
+  end
 end
 
 class NativeBridgeTest < Test::Unit::TestCase
