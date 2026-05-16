@@ -24,8 +24,8 @@ class DiscoveredDeviceTest < Test::Unit::TestCase
     other = CoreBluetoothMac::DiscoveredDevice.new(
       identifier: "ABCD", name: "StackChan-PicoRuby", rssi: -42,
       tx_power_level: nil, connectable: nil,
-      service_uuids: [], service_data: {}, manufacturer_data: nil,
-      solicited_service_uuids: [], overflow_service_uuids: [],
+      service_uuids: [].freeze, service_data: {}.freeze, manufacturer_data: nil,
+      solicited_service_uuids: [].freeze, overflow_service_uuids: [].freeze,
       central_id: 1,
     )
     assert_equal @dev, other
@@ -35,8 +35,8 @@ class DiscoveredDeviceTest < Test::Unit::TestCase
     other = CoreBluetoothMac::DiscoveredDevice.new(
       identifier: "WXYZ", name: "StackChan-PicoRuby", rssi: -42,
       tx_power_level: nil, connectable: nil,
-      service_uuids: [], service_data: {}, manufacturer_data: nil,
-      solicited_service_uuids: [], overflow_service_uuids: [],
+      service_uuids: [].freeze, service_data: {}.freeze, manufacturer_data: nil,
+      solicited_service_uuids: [].freeze, overflow_service_uuids: [].freeze,
       central_id: 1,
     )
     refute_equal @dev, other

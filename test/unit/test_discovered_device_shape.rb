@@ -14,8 +14,8 @@ class TestDiscoveredDeviceShape < Test::Unit::TestCase
     d = CoreBluetoothMac::DiscoveredDevice.new(
       identifier: "abc", name: nil, rssi: -50,
       tx_power_level: nil, connectable: nil,
-      service_uuids: [], service_data: {}, manufacturer_data: nil,
-      solicited_service_uuids: [], overflow_service_uuids: [],
+      service_uuids: [].freeze, service_data: {}.freeze, manufacturer_data: nil,
+      solicited_service_uuids: [].freeze, overflow_service_uuids: [].freeze,
       central_id: "central-1",
     )
     assert_equal "abc", d.identifier
@@ -25,5 +25,25 @@ class TestDiscoveredDeviceShape < Test::Unit::TestCase
   def test_no_old_4_field_shape
     # Sanity: ensure we removed the v0.2.0 4-field shape
     refute_equal 4, CoreBluetoothMac::DiscoveredDevice.members.size
+  end
+
+  def test_populated_instance_is_ractor_shareable
+    # Mirrors what Central#scan produces for a peripheral with non-nil
+    # manufacturer_data and non-empty service_data: every binary String and
+    # collection is frozen. Locks in Issue 2's fix (unhex must freeze).
+    d = CoreBluetoothMac::DiscoveredDevice.new(
+      identifier: "abc",
+      name: "test",
+      rssi: -50,
+      tx_power_level: 4,
+      connectable: true,
+      service_uuids: ["1800", "1801"].freeze,
+      service_data: { "1800" => "\x01\x02".b.freeze }.freeze,
+      manufacturer_data: "\xff\xee".b.freeze,
+      solicited_service_uuids: [].freeze,
+      overflow_service_uuids: [].freeze,
+      central_id: "central-1",
+    )
+    assert Ractor.shareable?(d), "DiscoveredDevice with populated fields must be Ractor-shareable"
   end
 end

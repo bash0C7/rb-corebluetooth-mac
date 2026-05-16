@@ -27,20 +27,12 @@ module CoreBluetoothMac
           connectable: h["connectable"],
           service_uuids: (h["service_uuids"] || []).freeze,
           service_data: build_service_data(h["service_data"]),
-          manufacturer_data: self.class.unhex(h["manufacturer_data"]),
+          manufacturer_data: unhex(h["manufacturer_data"]),
           solicited_service_uuids: (h["solicited_service_uuids"] || []).freeze,
           overflow_service_uuids: (h["overflow_service_uuids"] || []).freeze,
           central_id: central_id,
         )
       end
-    end
-
-    # Decode a hex string (e.g. "0a1b2c") into a binary ASCII-8BIT String.
-    # Returns nil for nil input. Used for `manufacturer_data` and each value
-    # of `service_data` (which arrive from Swift as lowercase hex).
-    def self.unhex(h)
-      return nil if h.nil?
-      [h].pack("H*").force_encoding(Encoding::ASCII_8BIT)
     end
 
     def connect(device, timeout: 5.0)
@@ -83,10 +75,20 @@ module CoreBluetoothMac
 
     private
 
+    # Decode a hex string (e.g. "0a1b2c") into a binary ASCII-8BIT String.
+    # Returns nil for nil input. Used for `manufacturer_data` and each value
+    # of `service_data` (which arrive from Swift as lowercase hex).
+    # The result is frozen so DiscoveredDevice instances stay Ractor.shareable
+    # when populated with non-empty ad-data.
+    def unhex(h)
+      return nil if h.nil?
+      [h].pack("H*").force_encoding(Encoding::ASCII_8BIT).freeze
+    end
+
     def build_service_data(raw)
       return {}.freeze if raw.nil? || raw.empty?
       out = {}
-      raw.each { |uuid, hex| out[uuid] = self.class.unhex(hex) }
+      raw.each { |uuid, hex| out[uuid] = unhex(hex) }
       out.freeze
     end
   end
