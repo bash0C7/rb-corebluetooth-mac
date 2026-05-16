@@ -14,6 +14,12 @@ module CoreBluetoothMac
       @central.__call_native(:peripheral_state, @identifier)
     end
 
+    def last_disconnect_error
+      h = @central.__call_native(:peripheral_last_disconnect_error, @identifier)
+      return nil if h.nil?
+      Error.new(h["message"], domain: h["domain"].to_sym, code: h["code"], code_name: h["code_name"]&.to_sym)
+    end
+
     # services: nil | String | [String]
     #   nil      → discover all services (CB default behaviour)
     #   String   → single UUID filter
@@ -43,7 +49,7 @@ module CoreBluetoothMac
     end
 
     def services
-      @services || raise(Error.new("call discover_services first", domain: :closed))
+      @services || raise(Error.new("call discover_services first", domain: :discovery))
     end
 
     def find_service(uuid)

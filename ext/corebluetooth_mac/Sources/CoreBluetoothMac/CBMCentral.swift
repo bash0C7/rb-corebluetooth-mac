@@ -374,12 +374,19 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         if let d = delegate(for: p.identifier) {
             d.connected = false
+            // Record disconnect error (or nil for clean disconnect) for polling via last_disconnect_error.
+            d.lastDisconnectInfo.withLock { $0 = error.map { $0 as NSError } }
             // If a connect was pending, surface the error.
             if d.connectError == nil && error != nil {
                 d.connectError = error
                 d.connectSem.signal()
             }
         }
+    }
+
+    func lastDisconnectError(identifier: String) -> NSError? {
+        guard let (_, d) = peripheral(identifier: identifier) else { return nil }
+        return d.lastDisconnectInfo.withLock { $0 }
     }
 
     func subscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,

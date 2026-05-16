@@ -40,6 +40,9 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     var includedSvcError: Error? = nil
     var includedSvcUUID: CBUUID? = nil
 
+    // Disconnect error (populated by centralManager(_:didDisconnectPeripheral:error:))
+    let lastDisconnectInfo = OSAllocatedUnfairLock<NSError?>(initialState: nil)
+
     init(peripheral: CBPeripheral) {
         self.peripheral = peripheral
         super.init()

@@ -69,9 +69,10 @@ class PeripheralRoutingTest < Test::Unit::TestCase
     assert_equal :validation, err.domain
   end
 
-  def test_services_raises_closed_error_before_discover
+  def test_services_raises_discovery_error_before_discover
     err = assert_raise(CoreBluetoothMac::Error) { @peripheral.services }
-    assert_equal :closed, err.domain
+    assert_equal :discovery, err.domain
+    assert_equal "call discover_services first", err.message
   end
 
   def test_find_service_case_insensitive

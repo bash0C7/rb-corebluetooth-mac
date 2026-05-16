@@ -54,6 +54,8 @@ module CoreBluetoothMac
       case op
       when :peripheral_state
         @native.peripheral_state(*args)
+      when :peripheral_last_disconnect_error
+        @native.peripheral_last_disconnect_error(*args)
       when :peripheral_discover_services
         # args: (identifier, services_filter_json_or_nil, timeout_ms)
         # C bridge returns the already-parsed array of `{uuid, is_primary}` hashes.

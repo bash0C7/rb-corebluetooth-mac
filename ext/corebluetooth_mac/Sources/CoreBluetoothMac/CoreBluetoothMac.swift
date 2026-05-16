@@ -236,6 +236,20 @@ public func cbm_service_discover_included_services(
 }
 
 @c
+public func cbm_peripheral_last_disconnect_error(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let nsErr = c.lastDisconnectError(identifier: String(cString: identifier))
+    if let e = nsErr {
+        let cbmErr = CBMError.from(e, fallbackDomain: "connection")
+        return strdup(CBMEnvelope.ok(cbmErr.json))
+    }
+    return strdup(CBMEnvelope.ok(nil))
+}
+
+@c
 public func cbm_characteristic_subscribe(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,

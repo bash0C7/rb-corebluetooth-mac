@@ -369,6 +369,14 @@ static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE 
     return Qnil;
 }
 
+static VALUE rb_peripheral_last_disconnect_error(VALUE self, VALUE id_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    char *env = cbm_peripheral_last_disconnect_error(p, StringValueCStr(id_v));
+    // Returns ok-envelope with data=null (clean disconnect) or data={error fields}.
+    return parse_envelope_freed(env);
+}
+
 struct subscribe_args {
     void *p; const char *id; const char *svc; const char *ch;
     int32_t timeout_ms; char *envelope;
@@ -476,7 +484,8 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "scan",       rb_central_scan, 3);
     rb_define_method(cNative, "connect",          rb_central_connect,    2);
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
-    rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
+    rb_define_method(cNative, "peripheral_state",                rb_peripheral_state,                1);
+    rb_define_method(cNative, "peripheral_last_disconnect_error", rb_peripheral_last_disconnect_error, 1);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);
     rb_define_method(cNative, "discover_characteristics",        rb_service_discover_characteristics,        3);
     rb_define_method(cNative, "discover_included_services",      rb_service_discover_included_services,      3);
