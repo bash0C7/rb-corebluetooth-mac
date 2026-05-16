@@ -216,6 +216,26 @@ public func cbm_service_discover_characteristics(
 }
 
 @c
+public func cbm_service_discover_included_services(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ timeout_ms: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.discoverIncludedServices(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let arr):
+        return strdup(CBMEnvelope.ok(arr))
+    case .failure(let err):
+        return strdup(CBMEnvelope.err(err))
+    }
+}
+
+@c
 public func cbm_characteristic_subscribe(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,

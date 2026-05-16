@@ -35,6 +35,11 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     var notifyError: Error? = nil
     var notifyCharUUID: CBUUID? = nil
 
+    // Discover included services (per service)
+    let includedSvcSem = DispatchSemaphore(value: 0)
+    var includedSvcError: Error? = nil
+    var includedSvcUUID: CBUUID? = nil
+
     init(peripheral: CBPeripheral) {
         self.peripheral = peripheral
         super.init()
@@ -54,6 +59,15 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
         if charsServiceUUID == service.uuid {
             charsError = error
             charsSem.signal()
+        }
+    }
+
+    func peripheral(_ p: CBPeripheral,
+                    didDiscoverIncludedServicesFor service: CBService,
+                    error: Error?) {
+        if includedSvcUUID == service.uuid {
+            includedSvcError = error
+            includedSvcSem.signal()
         }
     }
 

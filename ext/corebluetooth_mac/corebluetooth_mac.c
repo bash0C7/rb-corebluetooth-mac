@@ -270,6 +270,30 @@ static VALUE rb_service_discover_characteristics(VALUE self, VALUE id_v, VALUE s
     return NIL_P(data) ? rb_ary_new() : data;
 }
 
+struct disco_included_svc_args {
+    void *p; const char *id; const char *svc_uuid; int32_t timeout_ms;
+    char *envelope;
+};
+
+static void *disco_included_svc_no_gvl(void *data) {
+    struct disco_included_svc_args *a = (struct disco_included_svc_args *)data;
+    a->envelope = cbm_service_discover_included_services(a->p, a->id, a->svc_uuid, a->timeout_ms);
+    return NULL;
+}
+
+static VALUE rb_service_discover_included_services(VALUE self, VALUE id_v, VALUE svc_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct disco_included_svc_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v),
+        (int32_t)NUM2INT(timeout_ms_v), NULL
+    };
+    rb_thread_call_without_gvl(disco_included_svc_no_gvl, &a, RUBY_UBF_IO, NULL);
+    VALUE data = parse_envelope_freed(a.envelope);
+    return NIL_P(data) ? rb_ary_new() : data;
+}
+
 struct read_args {
     void *p; const char *id; const char *svc; const char *ch;
     int32_t timeout_ms; int32_t len; char *envelope;
@@ -454,7 +478,8 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
     rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);
-    rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
+    rb_define_method(cNative, "discover_characteristics",        rb_service_discover_characteristics,        3);
+    rb_define_method(cNative, "discover_included_services",      rb_service_discover_included_services,      3);
     rb_define_method(cNative, "characteristic_read",      rb_characteristic_read,                4);
     rb_define_method(cNative, "characteristic_write",     rb_characteristic_write,               6);
     rb_define_method(cNative, "characteristic_subscribe",   rb_characteristic_subscribe,   4);

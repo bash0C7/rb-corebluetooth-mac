@@ -61,6 +61,9 @@ module CoreBluetoothMac
       when :service_discover_characteristics
         # C bridge returns the already-parsed array of characteristic hashes.
         @native.discover_characteristics(*args)
+      when :service_discover_included_services
+        # C bridge returns the already-parsed array of {uuid, is_primary} hashes.
+        @native.discover_included_services(*args)
       when :characteristic_read
         @native.characteristic_read(*args)
       when :characteristic_write

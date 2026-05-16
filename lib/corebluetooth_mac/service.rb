@@ -29,6 +29,17 @@ module CoreBluetoothMac
       self
     end
 
+    def discover_included_services(timeout: 5.0)
+      arr = @peripheral.central.__call_native(
+        :service_discover_included_services,
+        @peripheral.identifier, @uuid, (timeout * 1000).to_i
+      )
+      @included_service_uuids = arr.map { |h| h["uuid"] }
+      arr.map do |h|
+        Service.new(peripheral: @peripheral, uuid: h["uuid"], is_primary: h["is_primary"])
+      end
+    end
+
     def characteristics
       @characteristics || raise(Error.new("call discover_characteristics first", domain: :closed))
     end

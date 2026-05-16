@@ -274,6 +274,33 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return .success(arr)
     }
 
+    func discoverIncludedServices(identifier: String, serviceUUID: String, timeoutMs: Int32)
+        -> Result<[[String: Any]], CBMError>
+    {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
+        let targetUUID = CBUUID(string: serviceUUID)
+        guard let service = (p.services ?? []).first(where: { $0.uuid == targetUUID }) else {
+            return .failure(.lib(domain: "discovery", message: "Service \(serviceUUID) not found on peripheral"))
+        }
+        d.includedSvcUUID = targetUUID
+        d.includedSvcError = nil
+        p.discoverIncludedServices(nil, for: service)
+        let r = d.includedSvcSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        d.includedSvcUUID = nil
+        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "discoverIncludedServices timed out after \(timeoutMs)ms")) }
+        if let e = d.includedSvcError { return .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
+        let arr: [[String: Any]] = (service.includedServices ?? []).map { svc in
+            return [
+                "uuid": svc.uuid.uuidString.lowercased(),
+                "is_primary": svc.isPrimary,
+            ]
+        }
+        return .success(arr)
+    }
+
     func readCharacteristic(identifier: String, serviceUUID: String, charUUID: String, timeoutMs: Int32)
         -> Result<Data, CBMError>
     {
