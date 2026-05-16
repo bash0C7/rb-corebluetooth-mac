@@ -16,3 +16,19 @@ end
 
 task test: :compile
 task default: :test
+
+namespace :clangd do
+  desc "Generate ext/corebluetooth_mac/compile_flags.txt for local clangd LSP"
+  task :setup do
+    require "rbconfig"
+    flags = [
+      "-I#{RbConfig::CONFIG['rubyhdrdir']}",
+      "-I#{RbConfig::CONFIG['rubyarchhdrdir']}",
+      "-I.",
+      "-Wall",
+    ]
+    path = File.expand_path("ext/corebluetooth_mac/compile_flags.txt", __dir__)
+    File.write(path, flags.join("\n") + "\n")
+    puts "wrote #{path}"
+  end
+end
