@@ -413,6 +413,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         guard let (p, _) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         let type: CBCharacteristicWriteType = withResponse ? .withResponse : .withoutResponse
         return .success(p.maximumWriteValueLength(for: type))
     }
