@@ -34,6 +34,13 @@ status: `[ ]` (open) / `[x]` (gem 側で対応済み)。
 
 ## API / contract レベル (Plan 進行中に追記予定)
 
+- [ ] **P1: `Characteristic#unsubscribe` が central 下の全 subscription を purge する**
+  - 観測: stackchan-picoruby Plan Task 6 進行中に Explore agent が rb-corebluetooth-mac Swift コード調査 (CBMCentral.unsubscribeCharacteristic L654)
+  - 直接原因: `unsubscribeCharacteristic` 内で `CBMSubscriptionRegistry.shared.purgeAll(under: self)` を呼んでて、対象 char だけでなく central の **全 subscription を purge** している
+  - 影響: 多重 subscribe (2 char 以上) 中に 1 char unsubscribe すると他全 subscription queue が close、`next_value` が `false` (terminal) を返し始める
+  - 現状の stackchan-picoruby 影響: 単発 subscription しか使ってないので発症せず (gem 側コメントも "safe for Phase 2 single-subscription cases" と認識済み)
+  - 改善案 (gem 側): purge target を char UUID で絞る、例えば `CBMSubscriptionRegistry.shared.purge(under: self, characteristicUUID: uuid)` を新設して unsubscribe path はこちらを使う
+
 - [ ] **P2: Apple CoreBluetooth が GAP (0x1800) / GATT (0x1801) services を `discoverServices(nil)` から filter する仕様を README に明記してほしい**
   - 観測: peripheral.discover_services(timeout:) 後 `peripheral.services` を見ると、device 側 att_db には GAP / FFE0 / NUS の 3 services あるのに、Mac 側は **FFE0 / NUS の 2 services しか返さない**
   - 直接原因: Apple platform 仕様。`peripheral.discover_services` 経由では 0x1800 / 0x1801 が露出しない (Apple が internal/implementation-level として扱う)
