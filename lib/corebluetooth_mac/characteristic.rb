@@ -2,24 +2,20 @@
 
 module CoreBluetoothMac
   class Characteristic
-    attr_reader :uuid, :properties, :service
+    attr_reader :uuid, :properties, :service, :initial_value
 
-    def initialize(service:, uuid:, properties:)
+    def initialize(service:, uuid:, properties:, initial_value: nil)
       @service = service
       @uuid = uuid
-      @properties = properties.frozen? ? properties : properties.freeze
+      @properties = properties.is_a?(Set) ? properties : Set.new(properties)
+      @properties.freeze unless @properties.frozen?
+      @initial_value = if initial_value
+                         initial_value.dup.force_encoding(Encoding::ASCII_8BIT).freeze
+                       end
     end
 
-    def readable?
-      @properties.include?(:read)
-    end
-
-    def writable?
-      @properties.include?(:write) || @properties.include?(:write_without_response)
-    end
-
-    def notify?
-      @properties.include?(:notify) || @properties.include?(:indicate)
+    def supports?(prop)
+      @properties.include?(prop)
     end
 
     def read(timeout: 5.0)

@@ -19,7 +19,8 @@ module CoreBluetoothMac
         Characteristic.new(
           service: self,
           uuid: h["uuid"],
-          properties: h["properties"].map(&:to_sym).to_set
+          properties: h["properties"].map(&:to_sym).to_set,
+          initial_value: h["initial_value"] && [h["initial_value"]].pack("H*")
         )
       end
       self

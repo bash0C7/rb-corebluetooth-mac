@@ -33,6 +33,6 @@ class DiscoverTest < Test::Unit::TestCase
     uuids = gap.characteristics.map(&:uuid)
     assert_includes uuids, DEVICE_NAME_CHAR_UUID
     ch = gap.find_characteristic(DEVICE_NAME_CHAR_UUID)
-    assert ch.readable?
+    assert ch.supports?(:read)
   end
 end

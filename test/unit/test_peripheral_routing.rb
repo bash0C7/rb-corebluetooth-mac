@@ -81,8 +81,8 @@ class ServiceRoutingTest < Test::Unit::TestCase
     @service.discover_characteristics
     ch = @service.characteristics.first
     assert_equal "00002a00-0000-1000-8000-00805f9b34fb", ch.uuid
-    assert ch.readable?
-    refute ch.writable?
+    assert ch.supports?(:read)
+    refute(ch.supports?(:write) || ch.supports?(:write_without_response))
   end
 
   def test_characteristics_raises_before_discover

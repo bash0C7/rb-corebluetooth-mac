@@ -249,12 +249,21 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         if let e = d.charsError { return .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
         let arr: [[String: Any]] = (service.characteristics ?? []).map { ch in
             var props: [String] = []
-            if ch.properties.contains(.read)                 { props.append("read") }
-            if ch.properties.contains(.write)                { props.append("write") }
-            if ch.properties.contains(.writeWithoutResponse) { props.append("write_without_response") }
-            if ch.properties.contains(.notify)               { props.append("notify") }
-            if ch.properties.contains(.indicate)             { props.append("indicate") }
-            return ["uuid": ch.uuid.uuidString.lowercased(), "properties": props]
+            if ch.properties.contains(.broadcast)                  { props.append("broadcast") }
+            if ch.properties.contains(.read)                       { props.append("read") }
+            if ch.properties.contains(.writeWithoutResponse)       { props.append("write_without_response") }
+            if ch.properties.contains(.write)                      { props.append("write") }
+            if ch.properties.contains(.notify)                     { props.append("notify") }
+            if ch.properties.contains(.indicate)                   { props.append("indicate") }
+            if ch.properties.contains(.authenticatedSignedWrites)  { props.append("authenticated_signed_writes") }
+            if ch.properties.contains(.extendedProperties)         { props.append("extended_properties") }
+            if ch.properties.contains(.notifyEncryptionRequired)   { props.append("notify_encryption_required") }
+            if ch.properties.contains(.indicateEncryptionRequired) { props.append("indicate_encryption_required") }
+            var d: [String: Any] = ["uuid": ch.uuid.uuidString.lowercased(), "properties": props]
+            if let v = ch.value {
+                d["initial_value"] = v.map { String(format: "%02x", $0) }.joined()
+            }
+            return d
         }
         return .success(arr)
     }
