@@ -5,6 +5,7 @@ require "set"
 
 require_relative "corebluetooth_mac/version"
 require_relative "corebluetooth_mac/errors"
+require_relative "corebluetooth_mac/error_codes"
 
 require_relative "corebluetooth_mac/discovered_device"
 require_relative "corebluetooth_mac/subscription"
