@@ -90,4 +90,24 @@ final class CBMSubscriptionRegistry: @unchecked Sendable {
             }
         }
     }
+
+    // Close + drop only the subscriptions matching both `central` and the
+    // given characteristic UUID. Used by `Characteristic#unsubscribe` so that
+    // other subscriptions on the same central (e.g. a second char being
+    // notified concurrently) survive. Snapshot-then-mutate for the same
+    // reason as `purgeAll`.
+    func purgeMatching(under central: CBMCentral, characteristicUUID: CBUUID) {
+        lock.withLock { dict in
+            let ids = dict.compactMap { (id, entry) in
+                (entry.central === central && entry.characteristicUUID == characteristicUUID) ? id : nil
+            }
+            for id in ids {
+                if let entry = dict[id] {
+                    entry.closed = true
+                    entry.semaphore.signal()
+                }
+                dict.removeValue(forKey: id)
+            }
+        }
+    }
 }
