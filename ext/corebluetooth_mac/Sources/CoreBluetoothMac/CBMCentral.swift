@@ -388,6 +388,19 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
                 }
             }
             d.rssiSem.signal()
+            // Fail-fast any in-progress descriptor operations.
+            d.descriptorsLock.withLock {
+                if $0 == nil { $0 = .failure(.lib(domain: "connection", message: "Peripheral disconnected")) }
+            }
+            d.descriptorsSem.signal()
+            d.descriptorReadLock.withLock {
+                if $0 == nil { $0 = .failure(.lib(domain: "connection", message: "Peripheral disconnected")) }
+            }
+            d.descriptorReadSem.signal()
+            d.descriptorWriteLock.withLock {
+                if $0 == nil { $0 = .failure(.lib(domain: "connection", message: "Peripheral disconnected")) }
+            }
+            d.descriptorWriteSem.signal()
         }
     }
 
@@ -422,6 +435,96 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }
         return d.lastDisconnectInfo.withLock { $0 }
+    }
+
+    // MARK: - Private helpers
+
+    private func findCharacteristic(_ p: CBPeripheral, serviceUUID: String, charUUID: String) -> CBCharacteristic? {
+        let svcId = CBUUID(string: serviceUUID)
+        let chId  = CBUUID(string: charUUID)
+        guard let svc = (p.services ?? []).first(where: { $0.uuid == svcId }) else { return nil }
+        return (svc.characteristics ?? []).first(where: { $0.uuid == chId })
+    }
+
+    private func findDescriptor(_ p: CBPeripheral, serviceUUID: String, charUUID: String,
+                                descUUID: String) -> CBDescriptor? {
+        guard let ch = findCharacteristic(p, serviceUUID: serviceUUID, charUUID: charUUID) else { return nil }
+        let dId = CBUUID(string: descUUID)
+        return (ch.descriptors ?? []).first(where: { $0.uuid == dId })
+    }
+
+    // MARK: - Descriptor operations
+
+    func discoverDescriptors(identifier: String, serviceUUID: String, charUUID: String,
+                              timeoutMs: Int32) -> Result<[[String: Any]], CBMError> {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
+        guard let ch = findCharacteristic(p, serviceUUID: serviceUUID, charUUID: charUUID) else {
+            return .failure(.lib(domain: "discovery", message: "Characteristic \(charUUID) not found"))
+        }
+        // Drain stale signals.
+        while d.descriptorsSem.wait(timeout: .now()) == .success {}
+        d.descriptorsLock.withLock { $0 = nil }
+        d.descriptorsCharUUID = ch.uuid.uuidString
+        p.discoverDescriptors(for: ch)
+        if d.descriptorsSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs))) == .timedOut {
+            return .failure(.lib(domain: "timeout", message: "discoverDescriptors timed out after \(timeoutMs)ms"))
+        }
+        guard let r = d.descriptorsLock.withLock({ $0 }) else {
+            return .failure(.lib(domain: "discovery", message: "discoverDescriptors result missing"))
+        }
+        return r.map { uuids in uuids.map { ["uuid": $0] } }
+    }
+
+    func readDescriptor(identifier: String, serviceUUID: String, charUUID: String,
+                         descUUID: String, timeoutMs: Int32) -> Result<Data, CBMError> {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
+        guard let desc = findDescriptor(p, serviceUUID: serviceUUID, charUUID: charUUID, descUUID: descUUID) else {
+            return .failure(.lib(domain: "discovery", message: "Descriptor \(descUUID) not found"))
+        }
+        // Drain stale signals.
+        while d.descriptorReadSem.wait(timeout: .now()) == .success {}
+        d.descriptorReadLock.withLock { $0 = nil }
+        d.descriptorReadUUID = desc.uuid.uuidString.lowercased()
+        p.readValue(for: desc)
+        if d.descriptorReadSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs))) == .timedOut {
+            return .failure(.lib(domain: "timeout", message: "readDescriptor timed out after \(timeoutMs)ms"))
+        }
+        guard let r = d.descriptorReadLock.withLock({ $0 }) else {
+            return .failure(.lib(domain: "discovery", message: "readDescriptor result missing"))
+        }
+        return r
+    }
+
+    func writeDescriptor(identifier: String, serviceUUID: String, charUUID: String,
+                          descUUID: String, data: Data, timeoutMs: Int32) -> CBMError? {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .lib(domain: "closed", message: "Unknown peripheral \(identifier)")
+        }
+        guard p.state == .connected else { return .lib(domain: "connection", message: "Peripheral not connected") }
+        guard let desc = findDescriptor(p, serviceUUID: serviceUUID, charUUID: charUUID, descUUID: descUUID) else {
+            return .lib(domain: "discovery", message: "Descriptor \(descUUID) not found")
+        }
+        // Drain stale signals.
+        while d.descriptorWriteSem.wait(timeout: .now()) == .success {}
+        d.descriptorWriteLock.withLock { $0 = nil }
+        d.descriptorWriteUUID = desc.uuid.uuidString.lowercased()
+        p.writeValue(data, for: desc)
+        if d.descriptorWriteSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs))) == .timedOut {
+            return .lib(domain: "timeout", message: "writeDescriptor timed out after \(timeoutMs)ms")
+        }
+        guard let r = d.descriptorWriteLock.withLock({ $0 }) else {
+            return .lib(domain: "discovery", message: "writeDescriptor result missing")
+        }
+        switch r {
+        case .success: return nil
+        case .failure(let err): return err
+        }
     }
 
     func subscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,

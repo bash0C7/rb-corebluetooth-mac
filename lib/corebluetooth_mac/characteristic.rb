@@ -53,6 +53,18 @@ module CoreBluetoothMac
       )
     end
 
+    def discover_descriptors(timeout: 5.0)
+      arr = central.__call_native(
+        :characteristic_discover_descriptors,
+        @service.peripheral.identifier, @service.uuid, @uuid, (timeout * 1000).to_i
+      )
+      @descriptors = arr.map { |h| Descriptor.new(characteristic: self, uuid: h["uuid"]) }
+    end
+
+    def descriptors
+      @descriptors || raise(Error.new("call discover_descriptors first", domain: :discovery))
+    end
+
     private
 
     def central

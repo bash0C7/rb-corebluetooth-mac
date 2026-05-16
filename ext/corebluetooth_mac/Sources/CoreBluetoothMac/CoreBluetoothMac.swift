@@ -347,3 +347,90 @@ public func cbm_subscription_next_value(
 public func cbm_subscription_close(_ subscription_id: Int64) {
     CBMSubscriptionRegistry.shared.close(subscriptionId: subscription_id)
 }
+
+@c
+public func cbm_characteristic_discover_descriptors(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ char_uuid: UnsafePointer<CChar>,
+    _ timeout_ms: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.discoverDescriptors(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        charUUID: String(cString: char_uuid),
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let arr):
+        return strdup(CBMEnvelope.ok(arr))
+    case .failure(let err):
+        return strdup(CBMEnvelope.err(err))
+    }
+}
+
+@c
+public func cbm_descriptor_read(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ char_uuid: UnsafePointer<CChar>,
+    _ desc_uuid: UnsafePointer<CChar>,
+    _ timeout_ms: Int32,
+    _ len_out: UnsafeMutablePointer<Int32>,
+    _ envelope_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<UInt8>? {
+    envelope_out.pointee = nil
+    len_out.pointee = 0
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.readDescriptor(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        charUUID: String(cString: char_uuid),
+        descUUID: String(cString: desc_uuid),
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let data):
+        envelope_out.pointee = strdup(CBMEnvelope.ok(nil))
+        let n = data.count
+        len_out.pointee = Int32(n)
+        if n == 0 {
+            let buf = malloc(1)?.assumingMemoryBound(to: UInt8.self)
+            return buf
+        }
+        let buf = malloc(n)!.assumingMemoryBound(to: UInt8.self)
+        data.copyBytes(to: buf, count: n)
+        return buf
+    case .failure(let err):
+        envelope_out.pointee = strdup(CBMEnvelope.err(err))
+        return nil
+    }
+}
+
+@c
+public func cbm_descriptor_write(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ service_uuid: UnsafePointer<CChar>,
+    _ char_uuid: UnsafePointer<CChar>,
+    _ desc_uuid: UnsafePointer<CChar>,
+    _ data: UnsafePointer<UInt8>,
+    _ data_len: Int32,
+    _ timeout_ms: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    let bytes = UnsafeBufferPointer(start: data, count: Int(data_len))
+    let payload = Data(buffer: bytes)
+    if let err = c.writeDescriptor(
+        identifier: String(cString: identifier),
+        serviceUUID: String(cString: service_uuid),
+        charUUID: String(cString: char_uuid),
+        descUUID: String(cString: desc_uuid),
+        data: payload,
+        timeoutMs: timeout_ms
+    ) {
+        return strdup(CBMEnvelope.err(err))
+    }
+    return strdup(CBMEnvelope.ok(nil))
+}

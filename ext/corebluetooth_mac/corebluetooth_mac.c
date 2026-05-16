@@ -495,6 +495,100 @@ static VALUE rb_subscription_close(VALUE self, VALUE central_id_v, VALUE sub_id_
     return Qnil;
 }
 
+// ---- Descriptor operations ----
+
+struct disco_desc_args {
+    void *p; const char *id; const char *svc; const char *ch;
+    int32_t timeout_ms; char *envelope;
+};
+
+static void *disco_desc_no_gvl(void *data) {
+    struct disco_desc_args *a = (struct disco_desc_args *)data;
+    a->envelope = cbm_characteristic_discover_descriptors(a->p, a->id, a->svc, a->ch, a->timeout_ms);
+    return NULL;
+}
+
+static VALUE rb_characteristic_discover_descriptors(VALUE self, VALUE id_v, VALUE svc_v,
+                                                     VALUE ch_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct disco_desc_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        (int32_t)NUM2INT(timeout_ms_v), NULL
+    };
+    rb_thread_call_without_gvl(disco_desc_no_gvl, &a, RUBY_UBF_IO, NULL);
+    VALUE data = parse_envelope_freed(a.envelope);
+    return NIL_P(data) ? rb_ary_new() : data;
+}
+
+struct desc_read_args {
+    void *p; const char *id; const char *svc; const char *ch; const char *desc;
+    int32_t timeout_ms; int32_t len; char *envelope;
+    unsigned char *buf;
+};
+
+static void *desc_read_no_gvl(void *data) {
+    struct desc_read_args *a = (struct desc_read_args *)data;
+    a->buf = cbm_descriptor_read(a->p, a->id, a->svc, a->ch, a->desc,
+                                  a->timeout_ms, &a->len, &a->envelope);
+    return NULL;
+}
+
+static VALUE rb_descriptor_read(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v,
+                                 VALUE desc_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct desc_read_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        StringValueCStr(desc_v), (int32_t)NUM2INT(timeout_ms_v), 0, NULL, NULL
+    };
+    rb_thread_call_without_gvl(desc_read_no_gvl, &a, RUBY_UBF_IO, NULL);
+    if (!a.envelope) {
+        if (a.buf) free(a.buf);
+        rb_raise(eErrorClass, "internal: descriptor_read returned no envelope");
+    }
+    if (!a.buf) {
+        (void)parse_envelope_freed(a.envelope);
+        return Qnil; // unreachable
+    }
+    free(a.envelope);
+    VALUE s = rb_str_new((const char *)a.buf, a.len);
+    free(a.buf);
+    return s;
+}
+
+struct desc_write_args {
+    void *p; const char *id; const char *svc; const char *ch; const char *desc;
+    const unsigned char *buf; int32_t buf_len; int32_t timeout_ms;
+    char *envelope;
+};
+
+static void *desc_write_no_gvl(void *data) {
+    struct desc_write_args *a = (struct desc_write_args *)data;
+    a->envelope = cbm_descriptor_write(a->p, a->id, a->svc, a->ch, a->desc,
+                                        a->buf, a->buf_len, a->timeout_ms);
+    return NULL;
+}
+
+static VALUE rb_descriptor_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE ch_v,
+                                  VALUE desc_v, VALUE data_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    StringValue(data_v);
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct desc_write_args a = {
+        p, StringValueCStr(id_v), StringValueCStr(svc_v), StringValueCStr(ch_v),
+        StringValueCStr(desc_v),
+        (const unsigned char *)RSTRING_PTR(data_v), (int32_t)RSTRING_LEN(data_v),
+        (int32_t)NUM2INT(timeout_ms_v), NULL
+    };
+    rb_thread_call_without_gvl(desc_write_no_gvl, &a, RUBY_UBF_IO, NULL);
+    (void)parse_envelope_freed(a.envelope);
+    return Qtrue;
+}
+
 // ---- Init ----
 
 void Init_corebluetooth_mac(void) {
@@ -523,6 +617,9 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "characteristic_write",     rb_characteristic_write,               6);
     rb_define_method(cNative, "characteristic_subscribe",   rb_characteristic_subscribe,   4);
     rb_define_method(cNative, "characteristic_unsubscribe", rb_characteristic_unsubscribe, 4);
+    rb_define_method(cNative, "characteristic_discover_descriptors", rb_characteristic_discover_descriptors, 4);
+    rb_define_method(cNative, "descriptor_read",  rb_descriptor_read,  5);
+    rb_define_method(cNative, "descriptor_write", rb_descriptor_write, 6);
 
     rb_define_module_function(mod, "__subscription_next_value", rb_subscription_next_value, 3);
     rb_define_module_function(mod, "__subscription_close",      rb_subscription_close,      2);
