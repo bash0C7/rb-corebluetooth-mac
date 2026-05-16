@@ -385,7 +385,8 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     }
 
     func lastDisconnectError(identifier: String) -> NSError? {
-        guard let (_, d) = peripheral(identifier: identifier) else { return nil }
+        guard let uuid = UUID(uuidString: identifier),
+              let d = delegate(for: uuid) else { return nil }
         return d.lastDisconnectInfo.withLock { $0 }
     }
 
