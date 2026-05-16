@@ -381,17 +381,26 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
                 d.connectError = error
                 d.connectSem.signal()
             }
+            // Fail-fast any in-progress readRSSI wait.
+            d.rssiLock.withLock {
+                if $0 == nil {
+                    $0 = .failure(.lib(domain: "connection", message: "Peripheral disconnected during readRSSI"))
+                }
+            }
+            d.rssiSem.signal()
         }
     }
 
-    func readRSSI(identifier: String, timeoutMs: Int) -> Result<Int, CBMError> {
+    func readRSSI(identifier: String, timeoutMs: Int32) -> Result<Int, CBMError> {
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
         guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
+        // Drain stale signals from prior disconnect/abort
+        while d.rssiSem.wait(timeout: .now()) == .success { }
         d.rssiLock.withLock { $0 = nil }
         p.readRSSI()
-        if d.rssiSem.wait(timeout: .now() + .milliseconds(timeoutMs)) == .timedOut {
+        if d.rssiSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs))) == .timedOut {
             return .failure(.lib(domain: "timeout", message: "readRSSI timed out after \(timeoutMs)ms"))
         }
         if let r = d.rssiLock.withLock({ $0 }) {

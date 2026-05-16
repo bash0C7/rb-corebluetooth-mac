@@ -242,7 +242,7 @@ public func cbm_peripheral_read_rssi(
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.readRSSI(identifier: String(cString: identifier), timeoutMs: Int(timeout_ms)) {
+    switch c.readRSSI(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
     case .success(let rssi):
         return strdup(CBMEnvelope.ok(NSNumber(value: rssi)))
     case .failure(let err):
