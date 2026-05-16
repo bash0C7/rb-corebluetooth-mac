@@ -40,6 +40,10 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     var includedSvcError: Error? = nil
     var includedSvcUUID: CBUUID? = nil
 
+    // Read RSSI
+    let rssiSem = DispatchSemaphore(value: 0)
+    let rssiLock = OSAllocatedUnfairLock<Result<Int, CBMError>?>(initialState: nil)
+
     // Disconnect error (populated by centralManager(_:didDisconnectPeripheral:error:))
     let lastDisconnectInfo = OSAllocatedUnfairLock<NSError?>(initialState: nil)
 
@@ -106,5 +110,14 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
             notifyError = error
             notifySem.signal()
         }
+    }
+
+    func peripheral(_ p: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        if let e = error {
+            rssiLock.withLock { $0 = .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
+        } else {
+            rssiLock.withLock { $0 = .success(RSSI.intValue) }
+        }
+        rssiSem.signal()
     }
 }

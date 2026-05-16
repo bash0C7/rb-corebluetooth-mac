@@ -369,6 +369,26 @@ static VALUE rb_characteristic_write(VALUE self, VALUE id_v, VALUE svc_v, VALUE 
     return Qnil;
 }
 
+struct read_rssi_args {
+    void *p; const char *id; int32_t timeout_ms;
+    char *envelope;
+};
+
+static void *read_rssi_no_gvl(void *data) {
+    struct read_rssi_args *a = (struct read_rssi_args *)data;
+    a->envelope = cbm_peripheral_read_rssi(a->p, a->id, a->timeout_ms);
+    return NULL;
+}
+
+static VALUE rb_peripheral_read_rssi(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
+    void *p = DATA_PTR(self);
+    if (!p) rb_raise(eErrorClass, "central is closed");
+    Check_Type(timeout_ms_v, T_FIXNUM);
+    struct read_rssi_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), NULL };
+    rb_thread_call_without_gvl(read_rssi_no_gvl, &a, RUBY_UBF_IO, NULL);
+    return parse_envelope_freed(a.envelope);
+}
+
 static VALUE rb_peripheral_last_disconnect_error(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
@@ -486,6 +506,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
     rb_define_method(cNative, "peripheral_state",                rb_peripheral_state,                1);
     rb_define_method(cNative, "peripheral_last_disconnect_error", rb_peripheral_last_disconnect_error, 1);
+    rb_define_method(cNative, "peripheral_read_rssi",             rb_peripheral_read_rssi,             2);
     rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);
     rb_define_method(cNative, "discover_characteristics",        rb_service_discover_characteristics,        3);
     rb_define_method(cNative, "discover_included_services",      rb_service_discover_included_services,      3);

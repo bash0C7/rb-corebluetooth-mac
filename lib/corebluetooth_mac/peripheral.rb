@@ -57,6 +57,10 @@ module CoreBluetoothMac
       services.find { |s| s.uuid.casecmp?(target) }
     end
 
+    def read_rssi(timeout: 5.0)
+      @central.__call_native(:peripheral_read_rssi, @identifier, (timeout * 1000).to_i)
+    end
+
     def find_characteristic(uuid)
       target = uuid.downcase
       (@services || []).each do |svc|

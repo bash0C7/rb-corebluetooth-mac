@@ -384,6 +384,22 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         }
     }
 
+    func readRSSI(identifier: String, timeoutMs: Int) -> Result<Int, CBMError> {
+        guard let (p, d) = peripheral(identifier: identifier) else {
+            return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
+        }
+        guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
+        d.rssiLock.withLock { $0 = nil }
+        p.readRSSI()
+        if d.rssiSem.wait(timeout: .now() + .milliseconds(timeoutMs)) == .timedOut {
+            return .failure(.lib(domain: "timeout", message: "readRSSI timed out after \(timeoutMs)ms"))
+        }
+        if let r = d.rssiLock.withLock({ $0 }) {
+            return r
+        }
+        return .failure(.lib(domain: "discovery", message: "RSSI result missing"))
+    }
+
     func lastDisconnectError(identifier: String) -> NSError? {
         guard let uuid = UUID(uuidString: identifier),
               let d = delegate(for: uuid) else { return nil }

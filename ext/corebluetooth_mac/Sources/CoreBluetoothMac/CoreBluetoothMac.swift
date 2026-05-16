@@ -236,6 +236,21 @@ public func cbm_service_discover_included_services(
 }
 
 @c
+public func cbm_peripheral_read_rssi(
+    _ ptr: UnsafeMutableRawPointer,
+    _ identifier: UnsafePointer<CChar>,
+    _ timeout_ms: Int32
+) -> UnsafeMutablePointer<CChar>? {
+    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
+    switch c.readRSSI(identifier: String(cString: identifier), timeoutMs: Int(timeout_ms)) {
+    case .success(let rssi):
+        return strdup(CBMEnvelope.ok(NSNumber(value: rssi)))
+    case .failure(let err):
+        return strdup(CBMEnvelope.err(err))
+    }
+}
+
+@c
 public func cbm_peripheral_last_disconnect_error(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>
