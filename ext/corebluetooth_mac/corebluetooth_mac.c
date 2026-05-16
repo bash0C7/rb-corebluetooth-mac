@@ -208,9 +208,13 @@ static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
     char *r = cbm_peripheral_state(p, StringValueCStr(id_v));
-    VALUE s = rb_utf8_str_new_cstr(r ? r : "unknown");
+    // Intern directly from the malloc'd C string (from Swift `strdup`); avoid the
+    // intermediate Ruby String. `rb_intern` copies into the symbol table, so it's
+    // safe to free `r` afterwards.
+    const char *state_cstr = r ? r : "unknown";
+    VALUE sym = ID2SYM(rb_intern(state_cstr));
     if (r) free(r);
-    return ID2SYM(rb_intern(StringValueCStr(s)));
+    return sym;
 }
 
 struct disco_svc_args {
@@ -400,8 +404,15 @@ static VALUE rb_subscription_next_value(VALUE self, VALUE central_id_v, VALUE su
     Check_Type(timeout_ms_v, T_FIXNUM);
     struct next_args a = { (int64_t)NUM2LL(sub_id_v), (int32_t)NUM2INT(timeout_ms_v), 0, 0, NULL };
     rb_thread_call_without_gvl(next_no_gvl, &a, RUBY_UBF_IO, NULL);
+    // Sentinel discipline:
+    //   closed (and no pending data) → :closed symbol (drained terminal state)
+    //   timeout (no data, not closed) → nil
+    //   data available                → mutable binary String
+    // Returning a symbol is cheaper than raising on the per-poll FFI hot path.
+    // The Ruby `Subscription#next_value` wrapper translates :closed → false.
     if (!a.buf) {
-        return Qnil;  // timeout or closed-empty
+        if (a.closed) return ID2SYM(rb_intern("closed"));
+        return Qnil;
     }
     // Mutable binary String, same convention as characteristic_read — callers
     // can chain `.force_encoding("UTF-8")` without `.dup` (matches Socket#read).

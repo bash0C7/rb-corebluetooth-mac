@@ -40,6 +40,8 @@ class SubscribeTest < Test::Unit::TestCase
     th = Thread.new { sub.next_value(timeout: 5.0) }
     sleep 0.1
     @tx.unsubscribe
-    assert_nil th.value
+    # Unsubscribe purges the subscription registry entry; next_value sees the
+    # entry as "drained-and-closed" and returns `false` per the v0.2.x contract.
+    assert_equal false, th.value
   end
 end
