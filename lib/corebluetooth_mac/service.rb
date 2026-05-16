@@ -2,12 +2,15 @@
 
 module CoreBluetoothMac
   class Service
-    attr_reader :uuid, :peripheral
+    attr_reader :uuid, :peripheral, :is_primary, :included_service_uuids
 
-    def initialize(peripheral:, uuid:)
+    def initialize(peripheral:, uuid:, is_primary:)
       @peripheral = peripheral
       @uuid = uuid
+      @is_primary = is_primary
       @characteristics = nil
+      # Populated by `discover_included_services` (Task 8). Empty until then.
+      @included_service_uuids = []
     end
 
     def discover_characteristics(timeout: 5.0)

@@ -23,16 +23,50 @@ class PeripheralRoutingTest < Test::Unit::TestCase
   end
 
   def test_discover_services_invokes_native_with_args
-    @central.stub(:peripheral_discover_services) { |_id, _ms| ["0000180a-0000-1000-8000-00805f9b34fb"] }
+    @central.stub(:peripheral_discover_services) do |_id, _filter, _ms|
+      [{"uuid" => "0000180a-0000-1000-8000-00805f9b34fb", "is_primary" => true}]
+    end
     @peripheral.discover_services(timeout: 2.5)
-    assert_equal [:peripheral_discover_services, ["AAAA", 2500]], @central.calls.first
+    assert_equal [:peripheral_discover_services, ["AAAA", nil, 2500]], @central.calls.first
   end
 
   def test_discover_services_populates_services
-    @central.stub(:peripheral_discover_services) { |_id, _ms| ["0000180a-0000-1000-8000-00805f9b34fb", "00001800-0000-1000-8000-00805f9b34fb"] }
+    @central.stub(:peripheral_discover_services) do |_id, _filter, _ms|
+      [{"uuid" => "0000180a-0000-1000-8000-00805f9b34fb", "is_primary" => true},
+       {"uuid" => "00001800-0000-1000-8000-00805f9b34fb", "is_primary" => true}]
+    end
     @peripheral.discover_services
     assert_equal 2, @peripheral.services.size
     assert_equal "00001800-0000-1000-8000-00805f9b34fb", @peripheral.services.last.uuid
+    assert_equal true, @peripheral.services.last.is_primary
+  end
+
+  def test_discover_services_with_single_uuid_filter_passes_json_array
+    @central.stub(:peripheral_discover_services) { |*| [] }
+    @peripheral.discover_services(services: "1800", timeout: 1.0)
+    assert_equal [:peripheral_discover_services, ["AAAA", '["1800"]', 1000]],
+                 @central.calls.first
+  end
+
+  def test_discover_services_with_array_filter_passes_json_array
+    @central.stub(:peripheral_discover_services) { |*| [] }
+    @peripheral.discover_services(services: ["1800", "180a"], timeout: 1.0)
+    assert_equal [:peripheral_discover_services, ["AAAA", '["1800","180a"]', 1000]],
+                 @central.calls.first
+  end
+
+  def test_discover_services_with_empty_array_filter_passes_nil
+    @central.stub(:peripheral_discover_services) { |*| [] }
+    @peripheral.discover_services(services: [], timeout: 1.0)
+    assert_equal [:peripheral_discover_services, ["AAAA", nil, 1000]],
+                 @central.calls.first
+  end
+
+  def test_discover_services_rejects_invalid_filter_type
+    err = assert_raise(CoreBluetoothMac::Error) do
+      @peripheral.discover_services(services: 42)
+    end
+    assert_equal :validation, err.domain
   end
 
   def test_services_raises_closed_error_before_discover
@@ -41,7 +75,9 @@ class PeripheralRoutingTest < Test::Unit::TestCase
   end
 
   def test_find_service_case_insensitive
-    @central.stub(:peripheral_discover_services) { |_id, _ms| ["00001800-0000-1000-8000-00805f9b34fb"] }
+    @central.stub(:peripheral_discover_services) do |_id, _filter, _ms|
+      [{"uuid" => "00001800-0000-1000-8000-00805f9b34fb", "is_primary" => true}]
+    end
     @peripheral.discover_services
     svc = @peripheral.find_service("00001800-0000-1000-8000-00805F9B34FB")
     refute_nil svc
@@ -59,7 +95,9 @@ class ServiceRoutingTest < Test::Unit::TestCase
   def setup
     @central = PeripheralRoutingTest::StubCentral.new(1)
     @peripheral = CoreBluetoothMac::Peripheral.new(central: @central, identifier: "AAAA")
-    @central.stub(:peripheral_discover_services) { |_id, _ms| ["00001800-0000-1000-8000-00805f9b34fb"] }
+    @central.stub(:peripheral_discover_services) do |_id, _filter, _ms|
+      [{"uuid" => "00001800-0000-1000-8000-00805f9b34fb", "is_primary" => true}]
+    end
     @peripheral.discover_services
     @service = @peripheral.services.first
   end
@@ -100,7 +138,9 @@ class CharacteristicRoutingTest < Test::Unit::TestCase
   def setup
     @central = PeripheralRoutingTest::StubCentral.new(1)
     @peripheral = CoreBluetoothMac::Peripheral.new(central: @central, identifier: "AAAA")
-    @central.stub(:peripheral_discover_services) { |_, _| ["00001800-0000-1000-8000-00805f9b34fb"] }
+    @central.stub(:peripheral_discover_services) do |*|
+      [{"uuid" => "00001800-0000-1000-8000-00805f9b34fb", "is_primary" => true}]
+    end
     @peripheral.discover_services
     @service = @peripheral.services.first
     @central.stub(:service_discover_characteristics) do |_p, _s, _t|

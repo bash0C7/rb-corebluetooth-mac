@@ -55,7 +55,8 @@ module CoreBluetoothMac
       when :peripheral_state
         @native.peripheral_state(*args)
       when :peripheral_discover_services
-        # C bridge returns the already-parsed array of service UUID strings.
+        # args: (identifier, services_filter_json_or_nil, timeout_ms)
+        # C bridge returns the already-parsed array of `{uuid, is_primary}` hashes.
         @native.discover_services(*args)
       when :service_discover_characteristics
         # C bridge returns the already-parsed array of characteristic hashes.

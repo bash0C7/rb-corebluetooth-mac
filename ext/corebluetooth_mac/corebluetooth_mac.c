@@ -218,21 +218,29 @@ static VALUE rb_peripheral_state(VALUE self, VALUE id_v) {
 }
 
 struct disco_svc_args {
-    void *p; const char *id; int32_t timeout_ms;
+    void *p; const char *id; const char *services_json; int32_t timeout_ms;
     char *envelope;
 };
 
 static void *disco_svc_no_gvl(void *data) {
     struct disco_svc_args *a = (struct disco_svc_args *)data;
-    a->envelope = cbm_peripheral_discover_services(a->p, a->id, a->timeout_ms);
+    a->envelope = cbm_peripheral_discover_services(a->p, a->id, a->services_json, a->timeout_ms);
     return NULL;
 }
 
-static VALUE rb_peripheral_discover_services(VALUE self, VALUE id_v, VALUE timeout_ms_v) {
+// Ruby args: (identifier:String, services_json:String|nil, timeout_ms:Integer).
+// `services_json` is a JSON-encoded array of UUID strings; nil = discover all.
+static VALUE rb_peripheral_discover_services(VALUE self, VALUE id_v, VALUE services_json_v, VALUE timeout_ms_v) {
     void *p = DATA_PTR(self);
     if (!p) rb_raise(eErrorClass, "central is closed");
     Check_Type(timeout_ms_v, T_FIXNUM);
-    struct disco_svc_args a = { p, StringValueCStr(id_v), (int32_t)NUM2INT(timeout_ms_v), NULL };
+    struct disco_svc_args a = {
+        p,
+        StringValueCStr(id_v),
+        NIL_P(services_json_v) ? NULL : StringValueCStr(services_json_v),
+        (int32_t)NUM2INT(timeout_ms_v),
+        NULL
+    };
     rb_thread_call_without_gvl(disco_svc_no_gvl, &a, RUBY_UBF_IO, NULL);
     VALUE data = parse_envelope_freed(a.envelope);
     return NIL_P(data) ? rb_ary_new() : data;
@@ -445,7 +453,7 @@ void Init_corebluetooth_mac(void) {
     rb_define_method(cNative, "connect",          rb_central_connect,    2);
     rb_define_method(cNative, "disconnect",       rb_central_disconnect, 1);
     rb_define_method(cNative, "peripheral_state", rb_peripheral_state,   1);
-    rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       2);
+    rb_define_method(cNative, "discover_services",        rb_peripheral_discover_services,       3);
     rb_define_method(cNative, "discover_characteristics", rb_service_discover_characteristics,   3);
     rb_define_method(cNative, "characteristic_read",      rb_characteristic_read,                4);
     rb_define_method(cNative, "characteristic_write",     rb_characteristic_write,               6);

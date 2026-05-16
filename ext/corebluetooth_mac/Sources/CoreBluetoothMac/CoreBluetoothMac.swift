@@ -106,12 +106,27 @@ public func cbm_peripheral_state(
 public func cbm_peripheral_discover_services(
     _ ptr: UnsafeMutableRawPointer,
     _ identifier: UnsafePointer<CChar>,
+    _ service_uuids_json: UnsafePointer<CChar>?,
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.discoverServices(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
-    case .success(let uuids):
-        return strdup(CBMEnvelope.ok(uuids))
+    // Same parsing pattern as `cbm_central_scan`: JSON array of UUID strings,
+    // nil = no filter (discover all services).
+    var services: [CBUUID]? = nil
+    if let json = service_uuids_json {
+        let s = String(cString: json)
+        if let data = s.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            services = arr.map { CBUUID(string: $0) }
+        }
+    }
+    switch c.discoverServices(
+        identifier: String(cString: identifier),
+        serviceUUIDs: services,
+        timeoutMs: timeout_ms
+    ) {
+    case .success(let arr):
+        return strdup(CBMEnvelope.ok(arr))
     case .failure(let err):
         return strdup(CBMEnvelope.err(err))
     }

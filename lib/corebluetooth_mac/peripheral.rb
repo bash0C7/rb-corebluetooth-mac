@@ -14,11 +14,31 @@ module CoreBluetoothMac
       @central.__call_native(:peripheral_state, @identifier)
     end
 
-    def discover_services(timeout: 5.0)
-      uuids = @central.__call_native(
-        :peripheral_discover_services, @identifier, (timeout * 1000).to_i
+    # services: nil | String | [String]
+    #   nil      → discover all services (CB default behaviour)
+    #   String   → single UUID filter
+    #   [String] → multi-UUID filter; empty array is treated as nil
+    def discover_services(services: nil, timeout: 5.0)
+      filter_json =
+        case services
+        when nil
+          nil
+        when String
+          JSON.dump([services])
+        when Array
+          services.empty? ? nil : JSON.dump(services)
+        else
+          raise Error.new(
+            "services must be nil, a UUID String, or an Array of UUID Strings",
+            domain: :validation
+          )
+        end
+      arr = @central.__call_native(
+        :peripheral_discover_services, @identifier, filter_json, (timeout * 1000).to_i
       )
-      @services = uuids.map { |u| Service.new(peripheral: self, uuid: u) }
+      @services = arr.map do |h|
+        Service.new(peripheral: self, uuid: h["uuid"], is_primary: h["is_primary"])
+      end
       self
     end
 

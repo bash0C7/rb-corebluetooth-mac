@@ -215,18 +215,24 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         }
     }
 
-    func discoverServices(identifier: String, timeoutMs: Int32) -> Result<[String], CBMError> {
+    func discoverServices(identifier: String, serviceUUIDs: [CBUUID]?, timeoutMs: Int32) -> Result<[[String: Any]], CBMError> {
         guard let (p, d) = peripheral(identifier: identifier) else {
             return .failure(.lib(domain: "closed", message: "Unknown peripheral \(identifier)"))
         }
         guard p.state == .connected else { return .failure(.lib(domain: "connection", message: "Peripheral not connected")) }
         d.servicesError = nil
-        p.discoverServices(nil)
+        p.discoverServices(serviceUUIDs)
         let r = d.servicesSem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
         if r == .timedOut { return .failure(.lib(domain: "timeout", message: "discoverServices timed out after \(timeoutMs)ms")) }
         if let e = d.servicesError { return .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
-        let uuids = (p.services ?? []).map { $0.uuid.uuidString.lowercased() }
-        return .success(uuids)
+        // CBService.isPrimary is a readonly Bool per <CoreBluetooth/CBService.h>.
+        let arr: [[String: Any]] = (p.services ?? []).map { svc in
+            return [
+                "uuid": svc.uuid.uuidString.lowercased(),
+                "is_primary": svc.isPrimary,
+            ]
+        }
+        return .success(arr)
     }
 
     func discoverCharacteristics(identifier: String, serviceUUID: String, timeoutMs: Int32)
