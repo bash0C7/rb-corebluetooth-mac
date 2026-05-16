@@ -23,6 +23,16 @@ bundle install
 
 The Swift native extension is built via `swift build` at install time. Xcode is not required.
 
+### When loaded from a `path:` (or git:) source
+
+If you wire the gem via `gem 'rb-corebluetooth-mac', path: '...'` instead of installing the published gem, Bundler skips the `extconf.rb` step and the prebuilt `lib/corebluetooth_mac/corebluetooth_mac.bundle` shipped in the repo is used as-is. Two consequences:
+
+1. **Pin your consumer to Ruby 4.0.3** (matches this gem's own `.ruby-version`) so the prebuilt native ext binds against the same `libruby` ABI. Mismatch surfaces at load time as `LoadError: linked to incompatible /Users/.../libruby.X.Y.dylib`. To rebuild for a different Ruby, run `bundle exec rake compile` in this repo with the matching Ruby active.
+2. **Add `swift_gem` to your Gemfile as a path/git entry too**, because it is a runtime dependency that is not (yet) published to rubygems.org:
+   ```ruby
+   gem 'swift_gem', path: '/path/to/swift_gem'
+   ```
+
 ## Bluetooth Permission
 
 The first time you create a `Central`, macOS shows an "Allow … to use Bluetooth?" prompt **bound to the process** (Terminal.app, iTerm.app, VS Code's integrated terminal, etc.). If denied, every subsequent `Central.new` raises `CoreBluetoothMac::Error` with `#domain == :closed` and a message instructing the user to enable Bluetooth permission. The same domain covers other unusable adapter states (off / unsupported / resetting).
@@ -65,9 +75,44 @@ ensure
 end
 ```
 
-## Subscribing to notifications (Ractor pump)
+## Subscribing to notifications
 
-`Subscription` is Ractor-shareable. A common pattern is to run the polling loop in a Ractor and yield received frames to the main thread.
+`Characteristic#subscribe` returns a `Subscription`. Poll it with `Subscription#next_value(timeout:)`, which returns:
+
+- **String** — notification payload (binary)
+- **`nil`** — timeout (no value arrived within `timeout`; entry is still alive, poll again)
+- **`false`** — entry is closed/drained terminal (use this to break loops)
+
+### Simple polling (main thread)
+
+```ruby
+require "corebluetooth_mac"
+
+central = CoreBluetoothMac::Central.new
+device  = central.scan(name: "YourDeviceName", timeout: 5.0).first or abort
+periph  = central.connect(device)
+periph.discover_services
+periph.services.each(&:discover_characteristics)
+
+tx = periph.find_characteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+sub = tx.subscribe
+
+deadline = Time.now + 10
+while (remaining = deadline - Time.now) > 0
+  v = sub.next_value(timeout: remaining)
+  break if v == false   # subscription closed/drained — terminal
+  next  if v.nil?       # timeout — keep polling until deadline
+  puts v.inspect
+end
+
+tx.unsubscribe
+central.disconnect(periph)
+central.close
+```
+
+### Ractor pump (parallel)
+
+`Subscription` is Ractor-shareable. Run the polling loop in a Ractor and yield received frames to the main thread when you want to interleave with other work:
 
 ```ruby
 require "corebluetooth_mac"
@@ -178,6 +223,7 @@ end
 - One in-flight blocking operation per peripheral per kind. Concurrent reads on the same peripheral are serialized.
 - BLE central role only; no `CBPeripheralManager` (peripheral / advertising) support.
 - macOS only; not iOS / iPadOS / Linux.
+- **Apple CoreBluetooth filters `0x1800` (GAP) and `0x1801` (GATT) services from `discoverServices(nil)`.** Their characteristics (Device Name `0x2a00`, Appearance `0x2a01`, Service Changed `0x2a05`, etc.) are therefore not reachable via `Peripheral#find_characteristic`. For the advertised local name, use `Central#scan` results (`DiscoveredDevice#name`) which come from the scan-response payload rather than the GATT database.
 
 ## License
 

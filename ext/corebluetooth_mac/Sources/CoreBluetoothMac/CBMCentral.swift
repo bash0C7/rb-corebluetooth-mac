@@ -650,8 +650,12 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         d.notifyCharUUID = nil
         if r == .timedOut { return .lib(domain: "timeout", message: "unsubscribe timed out") }
         if let e = d.notifyError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
-        // Close all subscriptions matching this characteristic UUID under this central.
-        CBMSubscriptionRegistry.shared.purgeAll(under: self) // simpler than per-char; safe for Phase 2 single-subscription cases
+        // Close + drop only the subscriptions matching this characteristic
+        // UUID under this central. Other concurrent subscriptions (e.g. a
+        // second char that this Ruby caller is still pumping in a Ractor)
+        // must stay alive — using `purgeAll(under:)` here would terminate
+        // them too and surface as a spurious `false` on `next_value`.
+        CBMSubscriptionRegistry.shared.purgeMatching(under: self, characteristicUUID: chId)
         return nil
     }
 }
