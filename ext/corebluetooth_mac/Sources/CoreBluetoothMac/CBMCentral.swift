@@ -390,7 +390,22 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             if let e = d.writeError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
             return nil
         } else {
-            // Best-effort. Optionally honor canSendWriteWithoutResponse.
+            // Honor CoreBluetooth flow control. A writeValue(type:.withoutResponse)
+            // issued while `canSendWriteWithoutResponse` is false is silently
+            // DROPPED — the dominant source of measured "packet loss" under load.
+            // When timeoutMs > 0, block (bounded) until the link can actually
+            // accept the write: peripheralIsReadyToSendWriteWithoutResponse:
+            // signals wwrReadySem, and we re-check the Bool after each wakeup
+            // (source of truth — robust to stale signals and lost wakeups).
+            // timeoutMs <= 0 preserves the legacy fire-and-forget behavior.
+            if timeoutMs > 0 {
+                let deadline = DispatchTime.now() + .milliseconds(Int(timeoutMs))
+                while !p.canSendWriteWithoutResponse {
+                    if d.wwrReadySem.wait(timeout: deadline) == .timedOut && !p.canSendWriteWithoutResponse {
+                        return .lib(domain: "timeout", message: "writeWithoutResponse not ready after \(timeoutMs)ms")
+                    }
+                }
+            }
             p.writeValue(data, for: ch, type: .withoutResponse)
             return nil
         }

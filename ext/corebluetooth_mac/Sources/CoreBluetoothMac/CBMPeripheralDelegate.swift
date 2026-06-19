@@ -50,6 +50,13 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     var writeError: Error? = nil
     var writeCharUUID: CBUUID? = nil
 
+    // Write WITHOUT response — flow control. CoreBluetooth silently DROPS a
+    // writeValue(type:.withoutResponse) issued while canSendWriteWithoutResponse
+    // is false. peripheralIsReadyToSendWriteWithoutResponse: signals this sem
+    // when the link can accept more; the withoutResponse write path waits on it
+    // (re-checking the Bool, which is the source of truth) so writes aren't lost.
+    let wwrReadySem = DispatchSemaphore(value: 0)
+
     // Notify state change
     let notifySem = DispatchSemaphore(value: 0)
     var notifyError: Error? = nil
@@ -194,6 +201,14 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
             writeError = error
             writeSem.signal()
         }
+    }
+
+    // CBPeripheralDelegate `peripheralIsReadyToSendWriteWithoutResponse:` —
+    // Apple SDK CBPeripheral.h. Fires after a withoutResponse write was held
+    // back by a full internal queue and the link can accept more. Wakes any
+    // writer blocked in the flow-controlled withoutResponse path.
+    func peripheralIsReadyToSendWriteWithoutResponse(_ p: CBPeripheral) {
+        wwrReadySem.signal()
     }
 
     func peripheral(_ p: CBPeripheral,
