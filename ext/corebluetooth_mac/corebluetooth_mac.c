@@ -133,9 +133,9 @@ static VALUE rb_central_id(VALUE self) {
     return LL2NUM(cbm_central_id(p));
 }
 
-// Task 15: explicit close. Calls the idempotent native teardown; the TypedData
-// pointer stays attached so subsequent calls go through the `isClosed` gate
-// and surface proper `:closed` domain errors via the envelope.
+// Explicit close. The TypedData pointer stays attached so subsequent
+// calls go through the `isClosed` gate and surface `:closed` envelope
+// errors. Native `close` is idempotent.
 static VALUE rb_central_close(VALUE self) {
     void *p = DATA_PTR(self);
     if (!p) return Qnil;

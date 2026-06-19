@@ -77,8 +77,8 @@ final class CBMSubscriptionRegistry: @unchecked Sendable {
     }
 
     func purgeAll(under central: CBMCentral) {
-        // Snapshot ids first; mutating a Swift Dictionary while iterating it via
-        // `for (k, v) in dict` is undefined behavior (L1 from the v0.2.1 audit).
+        // Snapshot ids first; mutating a Swift Dictionary while iterating it
+        // via `for (k, v) in dict` is undefined behavior.
         lock.withLock { dict in
             let ids = dict.compactMap { (id, entry) in entry.central === central ? id : nil }
             for id in ids {

@@ -188,7 +188,6 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
             readSem.signal()
             return
         }
-        // Notify path: hand off to SubscriptionRegistry (Task 18+)
         CBMSubscriptionRegistry.shared.enqueue(
             characteristic: characteristic, error: error
         )

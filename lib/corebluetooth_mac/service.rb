@@ -9,7 +9,6 @@ module CoreBluetoothMac
       @uuid = uuid
       @is_primary = is_primary
       @characteristics = nil
-      # Populated by `discover_included_services` (Task 8). Empty until then.
       @included_service_uuids = []
     end
 

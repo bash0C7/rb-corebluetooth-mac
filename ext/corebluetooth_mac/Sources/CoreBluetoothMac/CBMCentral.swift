@@ -12,8 +12,8 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
     private let stateLock = OSAllocatedUnfairLock<CBManagerState>(initialState: .unknown)
     private let stateSem = DispatchSemaphore(value: 0)
 
-    // Task 15: closed-state gate. Set once via `close()` (idempotent); every
-    // public op short-circuits with a `:closed` domain error so callers stop
+    // Closed-state gate. Set once via `close()` (idempotent); every public
+    // op short-circuits with a `:closed` domain error so callers stop
     // relying on GC for teardown.
     private let closedFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
 
@@ -87,9 +87,9 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         let overflowServiceUUIDs: [String]
     }
 
-    // All mutable state lives inside its lock to satisfy Swift 6 strict-concurrency
-    // (same pattern as `idCounter` in Task 11). A `var` + side-lock would emit
-    // "stored property of Sendable type" errors on a `@unchecked Sendable` class.
+    // All mutable state lives inside its lock to satisfy Swift 6 strict-
+    // concurrency. A `var` + side-lock would emit "stored property of
+    // Sendable type" errors on a `@unchecked Sendable` class.
     private let scanLock = OSAllocatedUnfairLock<[String: ScanResult]>(initialState: [:])
     private let nameFilter = OSAllocatedUnfairLock<String?>(initialState: nil)
     private let knownPeripherals = OSAllocatedUnfairLock<[UUID: CBPeripheral]>(initialState: [:])
@@ -390,14 +390,14 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             if let e = d.writeError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
             return nil
         } else {
-            // Honor CoreBluetooth flow control. A writeValue(type:.withoutResponse)
-            // issued while `canSendWriteWithoutResponse` is false is silently
-            // DROPPED — the dominant source of measured "packet loss" under load.
-            // When timeoutMs > 0, block (bounded) until the link can actually
-            // accept the write: peripheralIsReadyToSendWriteWithoutResponse:
-            // signals wwrReadySem, and we re-check the Bool after each wakeup
+            // A writeValue(type:.withoutResponse) issued while
+            // `canSendWriteWithoutResponse` is false is silently DROPPED —
+            // the dominant source of measured "packet loss" under load.
+            // timeoutMs > 0 blocks (bounded) until the link can accept the
+            // write: peripheralIsReadyToSendWriteWithoutResponse signals
+            // wwrReadySem, and the Bool is re-checked after each wakeup
             // (source of truth — robust to stale signals and lost wakeups).
-            // timeoutMs <= 0 preserves the legacy fire-and-forget behavior.
+            // timeoutMs <= 0 sends without waiting.
             if timeoutMs > 0 {
                 let deadline = DispatchTime.now() + .milliseconds(Int(timeoutMs))
                 while !p.canSendWriteWithoutResponse {
@@ -460,11 +460,11 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             }
             d.descriptorWriteSem.signal()
 
-            // Task 13: push a `disconnected` event onto the per-peripheral event queue.
-            // This runs AFTER lastDisconnectInfo (Task 9) and in-flight op fail-fast
-            // (Task 10/12) so existing paths continue to win the race and don't see a
-            // stale event queue. Payload mirrors the `last_disconnect_error` envelope:
-            // null for clean disconnect, or a CBMError-shaped error hash.
+            // Push a `disconnected` event onto the per-peripheral event queue.
+            // Runs AFTER lastDisconnectInfo and in-flight op fail-fast so
+            // existing paths continue to win the race and don't see a stale
+            // event queue. Payload mirrors the `last_disconnect_error`
+            // envelope: null for clean disconnect, or a CBMError-shaped hash.
             let errorPayload: Any
             if let e = error {
                 errorPayload = CBMError.from(e as NSError, fallbackDomain: "connection").json
@@ -513,8 +513,8 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         return d.lastDisconnectInfo.withLock { $0 }
     }
 
-    // Task 13/15: drain one event from the per-peripheral queue.
-    // Result shape distinguishes three cases the caller must surface differently:
+    // Drain one event from the per-peripheral queue.
+    // Result shape distinguishes the cases the caller must surface differently:
     //   .failure(.lib(domain: "closed", ...))     — central closed
     //   .failure(.lib(domain: "validation", ...)) — bad UUID or unknown peripheral
     //   .success(nil)                              — timeout (no event yet)

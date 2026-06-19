@@ -175,9 +175,9 @@ class CharacteristicRoutingTest < Test::Unit::TestCase
   def test_write_without_response_routes
     @central.stub(:characteristic_write) { |*| nil }
     @ch.write_without_response("p")
-    # write-without-response now passes a positive timeout (default 5.0s) so the
-    # native layer honors CoreBluetooth flow control (canSendWriteWithoutResponse)
-    # and does not silently drop under load. with_response flag stays 0.
+    # Default timeout 5.0s flows to the native layer so it can honor
+    # CoreBluetooth flow control (canSendWriteWithoutResponse).
+    # with_response flag is 0.
     assert_equal [:characteristic_write,
                   ["AAAA", "00001800-0000-1000-8000-00805f9b34fb",
                    "00002a00-0000-1000-8000-00805f9b34fb",
@@ -185,10 +185,10 @@ class CharacteristicRoutingTest < Test::Unit::TestCase
                  @central.calls.last
   end
 
-  def test_write_without_response_legacy_fire_and_forget
+  def test_write_without_response_zero_timeout_skips_flow_control
     @central.stub(:characteristic_write) { |*| nil }
     @ch.write_without_response("p", timeout: 0)
-    # timeout: 0 preserves the legacy fire-and-forget path (no flow-control wait).
+    # timeout: 0 skips the canSendWriteWithoutResponse wait (fire-and-forget).
     assert_equal [:characteristic_write,
                   ["AAAA", "00001800-0000-1000-8000-00805f9b34fb",
                    "00002a00-0000-1000-8000-00805f9b34fb",

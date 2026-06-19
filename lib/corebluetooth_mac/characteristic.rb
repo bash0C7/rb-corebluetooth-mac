@@ -34,10 +34,10 @@ module CoreBluetoothMac
       )
     end
 
-    # write-without-response now honors CoreBluetooth flow control: the native
-    # layer blocks (up to `timeout` s) until canSendWriteWithoutResponse is true
-    # so writes are not silently dropped under load. `timeout: 0` keeps the
-    # legacy fire-and-forget behavior (no flow-control wait).
+    # `timeout: 0` issues the write immediately; otherwise the native layer
+    # blocks up to `timeout` s on canSendWriteWithoutResponse — without that
+    # wait CoreBluetooth silently drops writes issued while the link is
+    # saturated.
     def write_without_response(data, timeout: 5.0)
       write(data, response: false, timeout: timeout)
     end

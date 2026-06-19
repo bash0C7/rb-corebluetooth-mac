@@ -35,9 +35,9 @@ public func cbm_central_new(
 @c
 public func cbm_central_free(_ ptr: UnsafeMutableRawPointer) {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeRetainedValue()
-    // Task 15: `close()` is idempotent and handles purgeAll + delegate teardown.
-    // Calling it from the TypedData free path covers GC-only callers; explicit
-    // `Central#close` from Ruby still wins because of the idempotency guard.
+    // `close()` is idempotent and handles purgeAll + delegate teardown.
+    // Calling it from the TypedData free path covers GC-only callers;
+    // explicit `Central#close` from Ruby still wins via the idempotency guard.
     c.close()
 }
 
@@ -61,7 +61,7 @@ public func cbm_central_scan(
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Task 15: surface a closed-domain error to Ruby instead of an empty array.
+    // Surface a closed-domain error to Ruby instead of an empty array.
     if c.isClosed {
         return strdup(CBMEnvelope.err(.lib(domain: "closed", message: "Central closed")))
     }
@@ -283,8 +283,8 @@ public func cbm_peripheral_poll_events(
     _ timeout_ms: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Task 15: Swift returns a Result now. Closed / unknown-identifier are
-    // distinct errors; success(nil) is timeout; success(some) is an event.
+    // Closed / unknown-identifier are distinct errors;
+    // success(nil) is timeout; success(some) is an event.
     switch c.pollPeripheralEvents(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
     case .failure(let err):
         return strdup(CBMEnvelope.err(err))
