@@ -30,12 +30,16 @@ module CoreBluetoothMac
       central.__call_native(
         :characteristic_write,
         @service.peripheral.identifier, @service.uuid, @uuid,
-        data, response ? 1 : 0, response ? (timeout * 1000).to_i : 0
+        data, response ? 1 : 0, (timeout * 1000).to_i
       )
     end
 
-    def write_without_response(data)
-      write(data, response: false, timeout: 0)
+    # write-without-response now honors CoreBluetooth flow control: the native
+    # layer blocks (up to `timeout` s) until canSendWriteWithoutResponse is true
+    # so writes are not silently dropped under load. `timeout: 0` keeps the
+    # legacy fire-and-forget behavior (no flow-control wait).
+    def write_without_response(data, timeout: 5.0)
+      write(data, response: false, timeout: timeout)
     end
 
     def subscribe
