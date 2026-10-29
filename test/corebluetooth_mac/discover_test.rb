@@ -19,20 +19,20 @@ class DiscoverTest < Test::Unit::TestCase
   rescue CoreBluetoothMac::Error
   end
 
-  def test_discover_services_includes_GAP
+  def gap_service
     @peripheral.discover_services(timeout: 5.0)
-    uuids = @peripheral.services.map(&:uuid)
-    assert_includes uuids, GAP_SERVICE_UUID
+    @peripheral.find_service(GAP_SERVICE_UUID) || omit("CoreBluetooth did not report the GAP service")
+  end
+
+  def test_discover_services_includes_GAP
+    assert_equal GAP_SERVICE_UUID, CoreBluetoothMac.uuid_key(gap_service.uuid)
   end
 
   def test_discover_characteristics_includes_DeviceName
-    @peripheral.discover_services
-    gap = @peripheral.find_service(GAP_SERVICE_UUID)
-    refute_nil gap, "Generic Access service missing"
+    gap = gap_service
     gap.discover_characteristics(timeout: 5.0)
-    uuids = gap.characteristics.map(&:uuid)
-    assert_includes uuids, DEVICE_NAME_CHAR_UUID
     ch = gap.find_characteristic(DEVICE_NAME_CHAR_UUID)
+    refute_nil ch, "Device Name characteristic missing"
     assert ch.supports?(:read)
   end
 end

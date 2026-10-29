@@ -26,11 +26,7 @@ class SubscribeRactorTest < Test::Unit::TestCase
     sub = @tx.subscribe
     assert Ractor.shareable?(sub)
 
-    pump = Ractor.new(sub) do |s|
-      data = s.next_value(timeout: 0.3)
-      data  # may be nil if no notification arrives within window — accept either
-    end
-    result = pump.take
+    result = Ractor.new(sub) { |s| s.next_value(timeout: 0.3) }.value
     assert(result.nil? || result.is_a?(String))
     @tx.unsubscribe
   end

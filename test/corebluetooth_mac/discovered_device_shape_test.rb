@@ -23,14 +23,10 @@ class TestDiscoveredDeviceShape < Test::Unit::TestCase
   end
 
   def test_no_old_4_field_shape
-    # Sanity: ensure we removed the v0.2.0 4-field shape
     refute_equal 4, CoreBluetoothMac::DiscoveredDevice.members.size
   end
 
   def test_populated_instance_is_ractor_shareable
-    # Mirrors what Central#scan produces for a peripheral with non-nil
-    # manufacturer_data and non-empty service_data: every binary String and
-    # collection is frozen. Locks in Issue 2's fix (unhex must freeze).
     d = CoreBluetoothMac::DiscoveredDevice.new(
       identifier: "abc",
       name: "test",

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "../test_helper"
+require "test_helper"
 
 class TestJsonEnvelope < Test::Unit::TestCase
   def test_scan_timeout_zero_returns_empty_or_timeout_error
@@ -10,6 +10,6 @@ class TestJsonEnvelope < Test::Unit::TestCase
   rescue CoreBluetoothMac::Error => e
     assert_includes [:timeout, :closed], e.domain
   ensure
-    central&.close rescue nil
+    central&.close
   end
 end

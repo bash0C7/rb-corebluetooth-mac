@@ -6,9 +6,6 @@ class TestPeripheralEventShape < Test::Unit::TestCase
   def test_name_updated_is_data
     e = CoreBluetoothMac::PeripheralEvent::NameUpdated.new(name: "newname")
     assert_equal "newname", e.name
-    # NOTE: assert_predicate e, :frozen? omitted per handoff §4.2 — Data.define
-    # instances are not auto-frozen; Ractor-shareability is verified in
-    # test_event_classes_ractor_shareable.
   end
 
   def test_services_invalidated_carries_uuids

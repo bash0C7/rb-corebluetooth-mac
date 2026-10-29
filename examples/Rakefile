@@ -2,8 +2,6 @@
 
 require_relative "../lib/corebluetooth_mac"
 
-# Shared helpers ---------------------------------------------------------------
-
 GAP_SERVICE      = "00001800-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_CHAR = "00002a00-0000-1000-8000-00805f9b34fb"
 NUS_TX_CHAR      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
@@ -13,9 +11,11 @@ def hex_or_nil(bin)
 end
 
 def scan_first(central, name)
-  devs = central.scan(name: name, timeout: 8.0)
+  name ||= ENV["BLE_TARGET_NAME"]
+  abort "name the target peripheral: pass name=ARG or set BLE_TARGET_NAME" if name.nil? || name.empty?
+  devs = central.scan(timeout: 8.0).select { |d| d.name == name || d.name&.start_with?(name) }
   abort "no peripheral matched name=#{name.inspect}" if devs.empty?
-  devs.first
+  devs.max_by(&:rssi)
 end
 
 namespace :examples do
@@ -120,19 +120,19 @@ namespace :examples do
     p.services.each(&:discover_characteristics)
     ch = p.find_characteristic(char_uuid) || abort("characteristic #{char_uuid} missing")
     sub = ch.subscribe
-    pump = Ractor.new(sub) do |s|
+    port = Ractor::Port.new
+    pump = Ractor.new(sub, port) do |s, out|
       10.times do
         v = s.next_value(timeout: 1.0)
-        break if v.nil? || v == false
-        Ractor.yield v.bytes.inspect
+        break unless v
+        out << v.unpack1("H*")
       end
-      :done
+      out << :done
     end
-    loop do
-      msg = pump.take
-      break if msg == :done
+    while (msg = port.receive) != :done
       puts msg
     end
+    pump.join
     ch.unsubscribe
   ensure
     c&.close

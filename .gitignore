@@ -4,26 +4,19 @@
 /doc/
 /pkg/
 /spec/reports/
-.bundle/
+.bundle/*
+!.bundle/config
 vendor/bundle/
 Gemfile.lock
 *.gem
-
-# Built native extension artifacts
 ext/**/.build/
 ext/**/Makefile
 ext/**/*.o
 ext/**/*.bundle
 ext/**/*.bundle.dSYM/
 ext/**/mkmf.log
-ext/**/*-Swift.h
-ext/**/compile_flags.txt
 lib/**/*.bundle
 lib/**/*.bundle.dSYM/
 /tmp/
-
-# Claude Code per-user settings
 .claude/settings.local.json
-
-# Session memory / working docs (private to local Claude Code; CLAUDE.md is the canonical norm)
 docs/superpowers/

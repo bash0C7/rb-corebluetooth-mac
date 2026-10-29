@@ -34,10 +34,6 @@ module CoreBluetoothMac
       )
     end
 
-    # `timeout: 0` issues the write immediately; otherwise the native layer
-    # blocks up to `timeout` s on canSendWriteWithoutResponse — without that
-    # wait CoreBluetooth silently drops writes issued while the link is
-    # saturated.
     def write_without_response(data, timeout: 5.0)
       write(data, response: false, timeout: timeout)
     end

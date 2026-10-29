@@ -6,9 +6,7 @@ class MaxWriteLengthTest < Test::Unit::TestCase
   def setup
     HardwareGuard.skip_unless_hardware!(self)
     @central = CoreBluetoothMac::Central.new(state_timeout: 5.0)
-    devs = @central.scan(timeout: 8.0)
-    omit "no peripherals" if devs.empty?
-    @peripheral = @central.connect(devs.first, timeout: 5.0)
+    @peripheral = @central.connect(HardwareGuard.target(self, @central), timeout: 5.0)
   end
 
   def teardown

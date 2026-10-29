@@ -20,10 +20,6 @@ module CoreBluetoothMac
       Error.new(h["message"], domain: h["domain"].to_sym, code: h["code"], code_name: h["code_name"]&.to_sym)
     end
 
-    # services: nil | String | [String]
-    #   nil      → discover all services (CB default behaviour)
-    #   String   → single UUID filter
-    #   [String] → multi-UUID filter; empty array is treated as nil
     def discover_services(services: nil, timeout: 5.0)
       filter_json =
         case services
@@ -53,8 +49,8 @@ module CoreBluetoothMac
     end
 
     def find_service(uuid)
-      target = uuid.downcase
-      services.find { |s| s.uuid.casecmp?(target) }
+      target = CoreBluetoothMac.uuid_key(uuid)
+      services.find { |s| CoreBluetoothMac.uuid_key(s.uuid) == target }
     end
 
     def read_rssi(timeout: 5.0)
@@ -65,22 +61,8 @@ module CoreBluetoothMac
       @central.__call_native(:peripheral_max_write_length, @identifier, response ? 1 : 0)
     end
 
-    # Drain one event from the per-peripheral event queue. Returns nil if no
-    # event arrived within `timeout` seconds. Otherwise returns a
-    # `CoreBluetoothMac::PeripheralEvent::*` Data instance.
-    #
-    # Events:
-    #   NameUpdated(name:)            — peripheralDidUpdateName:
-    #   ServicesInvalidated(uuids:)   — peripheral:didModifyServices:
-    #   Disconnected(error:)          — centralManager:didDisconnectPeripheral:error:
-    #
-    # The queue is cumulative across polls; callers loop to drain.
     def poll_events(timeout: 0.0)
       json = @central.__call_native(:peripheral_poll_events, @identifier, (timeout * 1000).to_i)
-      # `__call_native` returns the envelope `data` field: nil (timeout) or
-      # `{"tag"=>..., "payload"=>...}` (event). Closed Central or unknown
-      # peripheral raise Error(:closed) / Error(:validation) before reaching
-      # here via the envelope error path.
       return nil if json.nil?
       case json["tag"]
       when "name_updated"
@@ -102,10 +84,10 @@ module CoreBluetoothMac
     end
 
     def find_characteristic(uuid)
-      target = uuid.downcase
+      target = CoreBluetoothMac.uuid_key(uuid)
       (@services || []).each do |svc|
         next unless svc.characteristics_loaded?
-        ch = svc.characteristics.find { |c| c.uuid.casecmp?(target) }
+        ch = svc.characteristics.find { |c| CoreBluetoothMac.uuid_key(c.uuid) == target }
         return ch if ch
       end
       nil

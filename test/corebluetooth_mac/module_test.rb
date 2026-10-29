@@ -22,8 +22,6 @@ class NativeBridgeTest < Test::Unit::TestCase
   end
 
   def test_Native_alloc_creates_object
-    # Doesn't initialize CoreBluetooth — uses a sentinel state_timeout=0 to bypass the wait.
-    # CoreBluetoothMac::Native is a private class; we exercise via Central later.
     assert defined?(CoreBluetoothMac::Native)
   end
 end

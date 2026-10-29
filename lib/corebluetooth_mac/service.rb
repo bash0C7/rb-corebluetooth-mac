@@ -40,7 +40,7 @@ module CoreBluetoothMac
     end
 
     def characteristics
-      @characteristics || raise(Error.new("call discover_characteristics first", domain: :closed))
+      @characteristics || raise(Error.new("call discover_characteristics first", domain: :discovery))
     end
 
     def characteristics_loaded?
@@ -48,8 +48,8 @@ module CoreBluetoothMac
     end
 
     def find_characteristic(uuid)
-      target = uuid.downcase
-      characteristics.find { |c| c.uuid.casecmp?(target) }
+      target = CoreBluetoothMac.uuid_key(uuid)
+      characteristics.find { |c| CoreBluetoothMac.uuid_key(c.uuid) == target }
     end
   end
 end

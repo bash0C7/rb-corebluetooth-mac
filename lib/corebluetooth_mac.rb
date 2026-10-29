@@ -1,7 +1,19 @@
 # frozen_string_literal: true
 
 require "json"
-require "set"
+
+module CoreBluetoothMac
+  BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
+
+  def self.uuid_key(uuid)
+    u = uuid.downcase
+    case u.size
+    when 4 then "0000#{u}#{BASE_UUID_SUFFIX}"
+    when 8 then "#{u}#{BASE_UUID_SUFFIX}"
+    else u
+    end
+  end
+end
 
 require_relative "corebluetooth_mac/version"
 require_relative "corebluetooth_mac/errors"

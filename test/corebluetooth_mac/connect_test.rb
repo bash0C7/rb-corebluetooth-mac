@@ -14,7 +14,6 @@ class ConnectTest < Test::Unit::TestCase
   def teardown
     @central&.disconnect(@peripheral) if @peripheral
   rescue CoreBluetoothMac::Error
-    # Already disconnected.
   end
 
   def test_connect_returns_Peripheral
@@ -31,7 +30,6 @@ class ConnectTest < Test::Unit::TestCase
   def test_disconnect_then_state_is_disconnected
     @peripheral = @central.connect(@device, timeout: 5.0)
     @central.disconnect(@peripheral)
-    # CoreBluetooth disconnect is async; poll briefly.
     deadline = Time.now + 2.0
     until @peripheral.state == :disconnected || Time.now > deadline
       sleep 0.05

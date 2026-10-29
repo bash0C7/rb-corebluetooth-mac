@@ -9,9 +9,7 @@ class TestDiscoverIncludedServices < Test::Unit::TestCase
 
   def test_discover_included_services_returns_array
     central = CoreBluetoothMac::Central.new(state_timeout: 5.0)
-    devs = central.scan(timeout: 8.0)
-    omit "no peripherals" if devs.empty?
-    p = central.connect(devs.first, timeout: 5.0)
+    p = central.connect(HardwareGuard.target(self, central), timeout: 5.0)
     p.discover_services
     svc = p.services.first
     included = svc.discover_included_services(timeout: 5.0)

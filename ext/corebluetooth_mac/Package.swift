@@ -1,13 +1,20 @@
-// swift-tools-version:6.3
+// swift-tools-version: 6.4
+
 import PackageDescription
 
 let package = Package(
     name: "CoreBluetoothMac",
-    platforms: [.macOS("13.0")],
+    platforms: [.macOS(.v27)],
     products: [
-        .library(name: "CoreBluetoothMac", type: .dynamic, targets: ["CoreBluetoothMac"])
+        .library(
+            name: "CoreBluetoothMac",
+            type: .dynamic,
+            targets: ["CoreBluetoothMac"]
+        ),
     ],
     targets: [
-        .target(name: "CoreBluetoothMac", path: "Sources/CoreBluetoothMac")
+        .target(
+            name: "CoreBluetoothMac"
+        ),
     ]
 )
