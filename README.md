@@ -1,47 +1,33 @@
 # rb-corebluetooth-mac
 
-Apple CoreBluetooth (BLE central) for Ruby on macOS via Swift native extension.
+Apple CoreBluetooth (BLE central) for Ruby on macOS. Scans, connects, discovers, reads, writes, and subscribes to notifications through a Swift package and a thin C bridge. Built on [swift_gem](https://github.com/bash0C7/swift_gem).
 
 ## Requirements
 
-- macOS 13+ (Bluetooth permission prompt requires this; `OSAllocatedUnfairLock` in the Swift extension requires macOS 13)
-- Ruby (CRuby/MRI) ≥ 3.2 (no `.ruby-version` shipped — the consumer's Ruby is used)
-- Swift 6.3+ (recommended installer: [swiftly](https://www.swift.org/install/macos/))
-- A Bluetooth-capable Mac with permission granted to the terminal app
+- macOS 27+, Apple Silicon, with Bluetooth on
+- Xcode 27 (builds run `xcrun swift`)
+- Ruby 4.0+, Bundler 4.x
 
 ## Installation
 
-`Gemfile`:
-
-```ruby
-gem "rb-corebluetooth-mac"
-```
+Install from source:
 
 ```bash
+git clone https://github.com/bash0C7/rb-corebluetooth-mac.git
+cd rb-corebluetooth-mac
 bundle install
+bundle exec rake compile
 ```
 
-The Swift native extension is built via `swift build` at install time. Xcode is not required.
+## Bluetooth permission
 
-### When loaded from a `path:` (or git:) source
+The first `Central.new` makes macOS ask whether the app that started Ruby (Terminal, iTerm, the VS Code terminal, ...) may use Bluetooth. Until it is allowed, `Central.new` raises `CoreBluetoothMac::Error` with `#domain == :closed` and a message that names the setting. The same domain covers Bluetooth that is off, unsupported, or resetting.
 
-If you wire the gem via `gem 'rb-corebluetooth-mac', path: '...'` instead of installing the published gem, Bundler skips the `extconf.rb` step and the prebuilt `lib/corebluetooth_mac/corebluetooth_mac.bundle` shipped in the repo is used as-is. Two consequences:
-
-1. **The prebuilt `lib/corebluetooth_mac/corebluetooth_mac.bundle` is linked against whichever Ruby ABI last ran `rake compile` in this repo.** If your consumer's Ruby ABI does not match, load fails with `LoadError: linked to incompatible /Users/.../libruby.X.Y.dylib`. Run `bundle exec rake compile` in this repo with your consumer's Ruby active to rebuild the bundle for that ABI. (As a library, this gem does not ship a `.ruby-version` — the consumer chooses the Ruby.)
-2. **Add `swift_gem` to your Gemfile as a path/git entry too**, because it is a runtime dependency that is not (yet) published to rubygems.org:
-   ```ruby
-   gem 'swift_gem', path: '/path/to/swift_gem'
-   ```
-
-## Bluetooth Permission
-
-The first time you create a `Central`, macOS shows an "Allow … to use Bluetooth?" prompt **bound to the process** (Terminal.app, iTerm.app, VS Code's integrated terminal, etc.). If denied, every subsequent `Central.new` raises `CoreBluetoothMac::Error` with `#domain == :closed` and a message instructing the user to enable Bluetooth permission. The same domain covers other unusable adapter states (off / unsupported / resetting).
-
-To recover: System Settings → Privacy & Security → Bluetooth → toggle the terminal app on. To force a fresh prompt: `tccutil reset Bluetooth`.
+To allow it later: System Settings → Privacy & Security → Bluetooth → turn the app on. `tccutil reset Bluetooth` makes macOS ask again.
 
 ## Usage
 
-End-to-end: scan → connect → discover → read GAP Device Name → read RSSI → check MTU → drain one event cycle → disconnect → close.
+Scan, connect, discover, read, check the RSSI and write lengths, drain events, disconnect, close:
 
 ```ruby
 require "corebluetooth_mac"
@@ -49,15 +35,14 @@ require "corebluetooth_mac"
 central = CoreBluetoothMac::Central.new(state_timeout: 5.0)
 
 begin
-  devices = central.scan(name: "YourDeviceName", timeout: 5.0) # name: nil lists all advertisers
-  peripheral = central.connect(devices.first, timeout: 5.0)
+  device = central.scan(name: "YourDeviceName", timeout: 5.0).first or abort "not found"
+  peripheral = central.connect(device, timeout: 5.0)
 
-  peripheral.discover_services(services: ["1800"], timeout: 5.0) # filter; nil = discover all
-  gap = peripheral.find_service("1800")
-  gap.discover_characteristics
-
-  device_name_ch = gap.find_characteristic("2a00")
-  puts "Device Name: #{device_name_ch.read.force_encoding('UTF-8')}" if device_name_ch.supports?(:read)
+  peripheral.discover_services(timeout: 5.0)
+  peripheral.services.each(&:discover_characteristics)
+  peripheral.services.flat_map(&:characteristics).select { _1.supports?(:read) }.each do |ch|
+    puts "#{ch.uuid}: #{ch.read.unpack1('H*')}"
+  end
 
   puts "RSSI: #{peripheral.read_rssi} dBm"
   puts "Max write (with response):    #{peripheral.max_write_length(response: true)}"
@@ -75,15 +60,23 @@ ensure
 end
 ```
 
+`scan(name: nil)` returns every advertiser. `discover_services(services: ["180a"])` discovers only the listed services.
+
+Open an IRB console with the gem loaded:
+
+```bash
+bundle exec rake console
+```
+
 ## Subscribing to notifications
 
-`Characteristic#subscribe` returns a `Subscription`. Poll it with `Subscription#next_value(timeout:)`, which returns:
+`Characteristic#subscribe` returns a `Subscription`. `Subscription#next_value(timeout:)` returns:
 
-- **String** — notification payload (binary)
-- **`nil`** — timeout (no value arrived within `timeout`; entry is still alive, poll again)
-- **`false`** — entry is closed/drained terminal (use this to break loops)
+- **String**: the notification payload (binary)
+- **`nil`**: no value arrived within `timeout`; poll again
+- **`false`**: the subscription is closed and drained; stop polling
 
-### Simple polling (main thread)
+### Polling on the main thread
 
 ```ruby
 require "corebluetooth_mac"
@@ -100,8 +93,8 @@ sub = tx.subscribe
 deadline = Time.now + 10
 while (remaining = deadline - Time.now) > 0
   v = sub.next_value(timeout: remaining)
-  break if v == false   # subscription closed/drained — terminal
-  next  if v.nil?       # timeout — keep polling until deadline
+  break if v == false
+  next  if v.nil?
   puts v.inspect
 end
 
@@ -110,9 +103,9 @@ central.disconnect(periph)
 central.close
 ```
 
-### Ractor pump (parallel)
+### Polling in a Ractor
 
-`Subscription` is Ractor-shareable. Run the polling loop in a Ractor and yield received frames to the main thread when you want to interleave with other work:
+`Subscription` is Ractor-shareable and `next_value` runs inside a Ractor. Send the values back through a `Ractor::Port`:
 
 ```ruby
 require "corebluetooth_mac"
@@ -129,13 +122,18 @@ tx = periph.find_characteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
 rx.write("ping\n", response: true)
 sub = tx.subscribe
 
-pump = Ractor.new(sub) do |s|
+port = Ractor::Port.new
+pump = Ractor.new(sub, port) do |s, out|
   while (v = s.next_value(timeout: 5.0))
-    Ractor.yield v
+    out << v
   end
+  out << :done
 end
 
-5.times { puts pump.take.inspect }
+while (v = port.receive) != :done
+  puts v.inspect
+end
+pump.join
 tx.unsubscribe
 central.disconnect(periph)
 central.close
@@ -143,13 +141,13 @@ central.close
 
 ## Peripheral events
 
-`Peripheral#poll_events(timeout:)` drains asynchronous events from the underlying `CBPeripheralDelegate` callbacks. Returns one event per call, or `nil` if the queue is empty within `timeout` (seconds). Event types:
+`Peripheral#poll_events(timeout:)` returns one event from the peripheral's queue, or `nil` when none arrives within `timeout` seconds:
 
-- `PeripheralEvent::NameUpdated(name:)` — `peripheralDidUpdateName:` fired
-- `PeripheralEvent::ServicesInvalidated(uuids:)` — `peripheral:didModifyServices:` fired; cached services for those UUIDs should be re-discovered
-- `PeripheralEvent::Disconnected(error:)` — peripheral disconnected; `error` is a `CoreBluetoothMac::Error` or `nil` for clean disconnect
+- `PeripheralEvent::NameUpdated(name:)`: the peripheral changed its name
+- `PeripheralEvent::ServicesInvalidated(uuids:)`: the peripheral invalidated these services; discover them again
+- `PeripheralEvent::Disconnected(error:)`: the peripheral disconnected; `error` is a `CoreBluetoothMac::Error`, or `nil` for a clean disconnection
 
-After a disconnect event the same error is also available via `Peripheral#last_disconnect_error`.
+`Peripheral#last_disconnect_error` returns the error of the last disconnection.
 
 ## Descriptors
 
@@ -160,9 +158,13 @@ ch.descriptors.each do |d|
 end
 ```
 
+## Interrupts
+
+Every blocking call releases the GVL. `Interrupt` (Ctrl-C), `Thread#raise`, and `Thread#kill` end the wait at once; an interrupted `connect` also cancels the pending connection.
+
 ## Running the examples
 
-The repo ships with a Rakefile of demo tasks under `examples/`.
+`examples/Rakefile` holds demo tasks:
 
 ```bash
 cd examples
@@ -181,7 +183,7 @@ rake examples:scan_verbose[name]           # full ad-data dump
 rake examples:subscribe[name,char_uuid]    # subscribe + Ractor pump 10s
 ```
 
-Each task is documented with a `# columns: ...` legend describing the TSV output schema. Tasks accept a positional `name=ARG` (and where applicable, `char_uuid=ARG`):
+Each task's description starts with a `# columns: ...` legend for its tab-separated output. Tasks take a positional `name` (and, where listed, `char_uuid`). The tasks that connect need a target: `name`, or `BLE_TARGET_NAME` when `name` is omitted, matched against the advertised name exactly or as a prefix. They connect to the strongest match:
 
 ```bash
 bundle exec rake "examples:scan[YourDeviceName]"
@@ -191,19 +193,19 @@ bundle exec rake "examples:subscribe[YourDeviceName,6e400003-b5a3-f393-e0a9-e50e
 
 ## Errors
 
-All failures raise a single `CoreBluetoothMac::Error < StandardError`. Discriminate via `#domain` (Symbol):
+Every failure raises `CoreBluetoothMac::Error < StandardError`. Branch on `#domain`:
 
-| `#domain`     | Meaning                                                          |
-|---------------|------------------------------------------------------------------|
-| `:timeout`    | Operation did not complete within `timeout:`                     |
-| `:closed`     | Operation on a freed `Central` (after `#close`)                  |
-| `:connection` | Connect failed or peripheral disconnected mid-op                 |
-| `:discovery`  | Cached state not loaded yet (call `discover_*` first)            |
-| `:validation` | Bad argument shape (e.g. UUID malformed, write payload too big)  |
-| `:cb`         | `CBError` from CoreBluetooth (Bluetooth off, unauthorized, etc.) |
-| `:att`        | `CBATTError` from the remote peer (read/write not permitted etc.)|
+| `#domain`     | Meaning                                                                          |
+|---------------|----------------------------------------------------------------------------------|
+| `:timeout`    | The operation did not finish within `timeout:`                                   |
+| `:closed`     | The `Central` is closed, Bluetooth is unusable, or an operation other than `connect` and `poll_events` got a peripheral the `Central` has not scanned |
+| `:connection` | Connecting failed, `connect` got a peripheral the `Central` has not scanned, or the peripheral is not connected |
+| `:discovery`  | The service, characteristic, or descriptor is not discovered yet (call `discover_*` first) |
+| `:validation` | An argument has the wrong shape                                                  |
+| `:cb`         | `CBError` from CoreBluetooth                                                     |
+| `:att`        | `CBATTError` from the remote peer (read/write not permitted etc.)                |
 
-For `:cb` and `:att`, `#code` carries the numeric error code and `#code_name` carries a symbol like `:read_not_permitted` or `:peripheral_disconnected` when known.
+For `:cb` and `:att`, `#code` is the numeric code and `#code_name` a symbol such as `:read_not_permitted` or `:peripheral_disconnected`.
 
 ```ruby
 begin
@@ -220,10 +222,20 @@ end
 
 ## Limitations
 
-- One in-flight blocking operation per peripheral per kind. Concurrent reads on the same peripheral are serialized.
-- BLE central role only; no `CBPeripheralManager` (peripheral / advertising) support.
-- macOS only; not iOS / iPadOS / Linux.
-- **Apple CoreBluetooth filters `0x1800` (GAP) and `0x1801` (GATT) services from `discoverServices(nil)`.** Their characteristics (Device Name `0x2a00`, Appearance `0x2a01`, Service Changed `0x2a05`, etc.) are therefore not reachable via `Peripheral#find_characteristic`. For the advertised local name, use `Central#scan` results (`DiscoveredDevice#name`) which come from the scan-response payload rather than the GATT database.
+- One blocking operation of each kind per peripheral at a time.
+- BLE central role only; no `CBPeripheralManager` (peripheral / advertising).
+- macOS only.
+- CoreBluetooth does not report the GAP (`0x1800`) and GATT (`0x1801`) services of some peripherals; for those, Device Name (`0x2a00`) and the other characteristics under them are not reachable. Use `DiscoveredDevice#name` for the advertised name.
+
+## Development
+
+```bash
+bundle install
+bundle exec rake test
+BLE_HW=1 BLE_TARGET_NAME=YourDeviceName bundle exec rake test
+```
+
+`rake test` validates `sig/corebluetooth_mac.rbs`, runs `xcrun swift build -c release --package-path ext/corebluetooth_mac`, builds the C extension into `lib/corebluetooth_mac/corebluetooth_mac.bundle`, then runs the tests. The interrupt test scans for a moment and is omitted when the Bluetooth adapter is unavailable. The other tests that use the adapter run only with `BLE_HW=1`. Of those, the tests that connect to any peripheral use only the one whose advertised name equals or starts with `BLE_TARGET_NAME` and are omitted without it; the tests for a CoreS3 advertising `StackChan-PicoRuby` are omitted when it is not nearby.
 
 ## License
 
