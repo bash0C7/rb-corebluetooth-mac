@@ -85,6 +85,15 @@ class PeripheralRoutingTest < Test::Unit::TestCase
     assert_equal "00001800-0000-1000-8000-00805f9b34fb", svc.uuid
   end
 
+  def test_find_service_matches_short_and_full_uuid_forms
+    @central.stub(:peripheral_discover_services) do |*|
+      [{"uuid" => "180a", "is_primary" => true}]
+    end
+    @peripheral.discover_services
+    assert_equal "180a", @peripheral.find_service("0000180A-0000-1000-8000-00805f9b34fb")&.uuid
+    assert_equal "180a", @peripheral.find_service("180A")&.uuid
+  end
+
   def test_state_routes_to_native
     @central.stub(:peripheral_state) { |_| :connected }
     assert_equal :connected, @peripheral.state
@@ -126,12 +135,21 @@ class ServiceRoutingTest < Test::Unit::TestCase
 
   def test_characteristics_raises_before_discover
     err = assert_raise(CoreBluetoothMac::Error) { @service.characteristics }
-    assert_equal :closed, err.domain
+    assert_equal :discovery, err.domain
+  end
+
+  def test_find_characteristic_matches_full_uuid_of_short_form
+    @central.stub(:service_discover_characteristics) do |*|
+      [{"uuid" => "2a00", "properties" => ["read"]}]
+    end
+    @service.discover_characteristics
+    assert_equal "2a00", @service.find_characteristic("00002a00-0000-1000-8000-00805f9b34fb")&.uuid
+    assert_equal "2a00", @peripheral.find_characteristic("00002A00-0000-1000-8000-00805F9B34FB")&.uuid
   end
 
   def test_find_characteristic_raises_before_discover
     err = assert_raise(CoreBluetoothMac::Error) { @service.find_characteristic("anything") }
-    assert_equal :closed, err.domain
+    assert_equal :discovery, err.domain
   end
 end
 
@@ -175,9 +193,6 @@ class CharacteristicRoutingTest < Test::Unit::TestCase
   def test_write_without_response_routes
     @central.stub(:characteristic_write) { |*| nil }
     @ch.write_without_response("p")
-    # Default timeout 5.0s flows to the native layer so it can honor
-    # CoreBluetooth flow control (canSendWriteWithoutResponse).
-    # with_response flag is 0.
     assert_equal [:characteristic_write,
                   ["AAAA", "00001800-0000-1000-8000-00805f9b34fb",
                    "00002a00-0000-1000-8000-00805f9b34fb",
@@ -188,7 +203,6 @@ class CharacteristicRoutingTest < Test::Unit::TestCase
   def test_write_without_response_zero_timeout_skips_flow_control
     @central.stub(:characteristic_write) { |*| nil }
     @ch.write_without_response("p", timeout: 0)
-    # timeout: 0 skips the canSendWriteWithoutResponse wait (fire-and-forget).
     assert_equal [:characteristic_write,
                   ["AAAA", "00001800-0000-1000-8000-00805f9b34fb",
                    "00002a00-0000-1000-8000-00805f9b34fb",

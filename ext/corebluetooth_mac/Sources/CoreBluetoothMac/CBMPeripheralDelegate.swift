@@ -1,135 +1,97 @@
+import CoreBluetooth
 import Foundation
-@preconcurrency import CoreBluetooth
 import os
 
-// Tags emitted to the Ruby side via the event queue. `rawValue` is the
-// snake_case string the Ruby `Peripheral#poll_events` dispatcher matches on
-// (handoff §4.1 — Ruby idiom + envelope JSON convention).
+/// The tag of an event in a peripheral's event queue, as Ruby receives it.
 enum PeripheralEventTag: String {
     case nameUpdated         = "name_updated"
     case servicesInvalidated = "services_invalidated"
     case disconnected        = "disconnected"
 }
 
-// State held inside the typed lock. Bound semaphore lives alongside the queue
-// so producer/consumer share both atomically.
-// `@unchecked Sendable` because the queue stores `[String: Any]` payloads
-// (Apple SDK types — NSNull, etc.) which aren't statically Sendable. All
-// mutation goes through OSAllocatedUnfairLock<PeripheralEventState> so this
-// is safe (mirrors the @unchecked Sendable pattern on CBMPeripheralDelegate itself).
+/// A peripheral's event queue and the semaphore whose count equals the queue length.
 struct PeripheralEventState: @unchecked Sendable {
     var queue: [(tag: PeripheralEventTag, payload: [String: Any])] = []
     let sem = DispatchSemaphore(value: 0)
 }
 
+/// The `CBPeripheralDelegate` of one peripheral, holding the result and semaphore of each pending operation.
 final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Sendable {
+    static let eventQueueLimit = 256
+
     let peripheral: CBPeripheral
 
-    // Connect
     let connectSem = DispatchSemaphore(value: 0)
     var connectError: Error? = nil
     var connected: Bool = false
 
-    // Discover services
     let servicesSem = DispatchSemaphore(value: 0)
     var servicesError: Error? = nil
 
-    // Discover characteristics (per service)
     let charsSem = DispatchSemaphore(value: 0)
     var charsError: Error? = nil
     var charsServiceUUID: CBUUID? = nil
 
-    // Read
     let readSem = DispatchSemaphore(value: 0)
     var readError: Error? = nil
     var readValue: Data? = nil
     var readCharUUID: CBUUID? = nil
 
-    // Write (with response)
     let writeSem = DispatchSemaphore(value: 0)
     var writeError: Error? = nil
     var writeCharUUID: CBUUID? = nil
 
-    // Write WITHOUT response — flow control. CoreBluetooth silently DROPS a
-    // writeValue(type:.withoutResponse) issued while canSendWriteWithoutResponse
-    // is false. peripheralIsReadyToSendWriteWithoutResponse: signals this sem
-    // when the link can accept more; the withoutResponse write path waits on it
-    // (re-checking the Bool, which is the source of truth) so writes aren't lost.
     let wwrReadySem = DispatchSemaphore(value: 0)
 
-    // Notify state change
     let notifySem = DispatchSemaphore(value: 0)
     var notifyError: Error? = nil
     var notifyCharUUID: CBUUID? = nil
 
-    // Discover included services (per service)
     let includedSvcSem = DispatchSemaphore(value: 0)
     var includedSvcError: Error? = nil
     var includedSvcUUID: CBUUID? = nil
 
-    // Read RSSI
     let rssiSem = DispatchSemaphore(value: 0)
     let rssiLock = OSAllocatedUnfairLock<Result<Int, CBMError>?>(initialState: nil)
 
-    // Discover descriptors (per characteristic)
     let descriptorsSem = DispatchSemaphore(value: 0)
     let descriptorsLock = OSAllocatedUnfairLock<Result<[String], CBMError>?>(initialState: nil)
     var descriptorsCharUUID: String? = nil
 
-    // Read descriptor value
     let descriptorReadSem = DispatchSemaphore(value: 0)
     let descriptorReadLock = OSAllocatedUnfairLock<Result<Data, CBMError>?>(initialState: nil)
     var descriptorReadUUID: String? = nil
 
-    // Write descriptor value
     let descriptorWriteSem = DispatchSemaphore(value: 0)
     let descriptorWriteLock = OSAllocatedUnfairLock<Result<Void, CBMError>?>(initialState: nil)
     var descriptorWriteUUID: String? = nil
 
-    // Disconnect error (populated by centralManager(_:didDisconnectPeripheral:error:))
     let lastDisconnectInfo = OSAllocatedUnfairLock<NSError?>(initialState: nil)
 
-    // Event queue (name_updated / services_invalidated / disconnected) drained
-    // by `cbm_peripheral_poll_events`. Typed lock + bound DispatchSemaphore for
-    // bounded-wait dequeue. Bound is 256; older events are dropped on overflow.
     let events = OSAllocatedUnfairLock<PeripheralEventState>(initialState: PeripheralEventState())
 
+    /// Appends an event, dropping the oldest one when the queue holds ``eventQueueLimit`` events.
     func pushEvent(tag: PeripheralEventTag, payload: [String: Any]) {
-        // Box the payload because `[String: Any]` (Apple SDK NSNull / NSError
-        // hash values) is not Sendable; the typed lock's withLock closure
-        // requires a Sendable return. Box<T> is the project's @unchecked
-        // Sendable wrapper (see CBMSync.swift).
         let payloadBox = Box(payload)
         let signalSem: DispatchSemaphore? = events.withLock { state in
-            let isOverflow = state.queue.count >= 256
-            if isOverflow { state.queue.removeFirst() }  // drop oldest on overflow
+            let isOverflow = state.queue.count >= Self.eventQueueLimit
+            if isOverflow { state.queue.removeFirst() }
             state.queue.append((tag: tag, payload: payloadBox.value))
-            // Only signal when net-adding (overflow drops one, adds one → net 0 → don't signal).
-            // Keeps invariant: sem.count == queue.count. Otherwise phantom signals
-            // accumulate and pollEvent's post-wait re-dequeue returns nil, which the
-            // Ruby caller misreads as a timeout.
             return isOverflow ? nil : state.sem
         }
         signalSem?.signal()
     }
 
-    func pollEvent(timeoutMs: Int32) -> (tag: String, payload: [String: Any])? {
-        // Fast path: already-queued event, no wait. Return a Box from inside
-        // the lock to satisfy Sendable; unwrap outside the closure.
-        let fastPath: Box<(PeripheralEventTag, [String: Any])>? = events.withLock { state in
-            state.queue.isEmpty ? nil : Box(state.queue.removeFirst())
-        }
-        if let immediate = fastPath {
-            return (immediate.value.0.rawValue, immediate.value.1)
-        }
+    /// Takes the oldest event, waiting up to `timeoutMs` milliseconds for one.
+    ///
+    /// - Returns: The event's tag and payload, or `nil` when none arrives in time.
+    func pollEvent(timeoutMs: Int32, cancel: CBMCancel) -> (tag: String, payload: [String: Any])? {
         let sem = events.withLock { $0.sem }
-        let r = sem.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
-        if r == .timedOut { return nil }
-        let waited: Box<(PeripheralEventTag, [String: Any])>? = events.withLock { state in
+        if cancel.wait(sem, until: deadline(timeoutMs)) == .timedOut { return nil }
+        let event: Box<(PeripheralEventTag, [String: Any])>? = events.withLock { state in
             state.queue.isEmpty ? nil : Box(state.queue.removeFirst())
         }
-        guard let e = waited else { return nil }
-        return (e.value.0.rawValue, e.value.1)
+        return event.map { ($0.value.0.rawValue, $0.value.1) }
     }
 
     init(peripheral: CBPeripheral) {
@@ -138,21 +100,12 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
         peripheral.delegate = self
     }
 
-    // MARK: CBPeripheralDelegate
-
-    // CBPeripheralDelegate `peripheralDidUpdateName:` — Apple SDK
-    // CBPeripheral.h L282. Pushes a `name_updated` event with the new name
-    // (empty string if peripheral.name is nil — payload key always present).
     func peripheralDidUpdateName(_ p: CBPeripheral) {
         pushEvent(tag: .nameUpdated, payload: ["name": p.name ?? ""])
     }
 
-    // CBPeripheralDelegate `peripheral:didModifyServices:` — Apple SDK
-    // CBPeripheral.h L294. Pushes a `services_invalidated` event carrying the
-    // lowercased UUID strings of the invalidated services.
     func peripheral(_ p: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
-        let uuids = invalidatedServices.map { $0.uuid.uuidString.lowercased() }
-        pushEvent(tag: .servicesInvalidated, payload: ["uuids": uuids])
+        pushEvent(tag: .servicesInvalidated, payload: ["uuids": invalidatedServices.map { $0.uuid.uuidString.lowercased() }])
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
@@ -160,59 +113,42 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
         servicesSem.signal()
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didDiscoverCharacteristicsFor service: CBService,
-                    error: Error?) {
+    func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if charsServiceUUID == service.uuid {
             charsError = error
             charsSem.signal()
         }
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didDiscoverIncludedServicesFor service: CBService,
-                    error: Error?) {
+    func peripheral(_ p: CBPeripheral, didDiscoverIncludedServicesFor service: CBService, error: Error?) {
         if includedSvcUUID == service.uuid {
             includedSvcError = error
             includedSvcSem.signal()
         }
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didUpdateValueFor characteristic: CBCharacteristic,
-                    error: Error?) {
-        // Read result OR notification
+    func peripheral(_ p: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if readCharUUID == characteristic.uuid {
             readError = error
             readValue = characteristic.value
             readSem.signal()
             return
         }
-        CBMSubscriptionRegistry.shared.enqueue(
-            characteristic: characteristic, error: error
-        )
+        CBMSubscriptionRegistry.shared.enqueue(characteristic: characteristic)
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didWriteValueFor characteristic: CBCharacteristic,
-                    error: Error?) {
+    func peripheral(_ p: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if writeCharUUID == characteristic.uuid {
             writeError = error
             writeSem.signal()
         }
     }
 
-    // CBPeripheralDelegate `peripheralIsReadyToSendWriteWithoutResponse:` —
-    // Apple SDK CBPeripheral.h. Fires after a withoutResponse write was held
-    // back by a full internal queue and the link can accept more. Wakes any
-    // writer blocked in the flow-controlled withoutResponse path.
-    func peripheralIsReadyToSendWriteWithoutResponse(_ p: CBPeripheral) {
+    func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) {
         wwrReadySem.signal()
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didUpdateNotificationStateFor characteristic: CBCharacteristic,
-                    error: Error?) {
+    func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if notifyCharUUID == characteristic.uuid {
             notifyError = error
             notifySem.signal()
@@ -220,63 +156,45 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     }
 
     func peripheral(_ p: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
-        if let e = error {
-            rssiLock.withLock { $0 = .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
-        } else {
-            rssiLock.withLock { $0 = .success(RSSI.intValue) }
+        rssiLock.withLock {
+            $0 = error.map { .failure(CBMError.from($0 as NSError, fallbackDomain: "discovery")) } ?? .success(RSSI.intValue)
         }
         rssiSem.signal()
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didDiscoverDescriptorsFor characteristic: CBCharacteristic,
-                    error: Error?) {
-        let charUUIDStr = characteristic.uuid.uuidString
-        guard charUUIDStr == descriptorsCharUUID else { return }
-        if let e = error {
-            descriptorsLock.withLock { $0 = .failure(CBMError.from(e as NSError, fallbackDomain: "discovery")) }
-        } else {
-            let uuids = (characteristic.descriptors ?? []).map { $0.uuid.uuidString.lowercased() }
-            descriptorsLock.withLock { $0 = .success(uuids) }
+    func peripheral(_ p: CBPeripheral, didDiscoverDescriptorsFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid.uuidString == descriptorsCharUUID else { return }
+        let uuids = (characteristic.descriptors ?? []).map { $0.uuid.uuidString.lowercased() }
+        descriptorsLock.withLock {
+            $0 = error.map { .failure(CBMError.from($0 as NSError, fallbackDomain: "discovery")) } ?? .success(uuids)
         }
         descriptorsSem.signal()
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didUpdateValueFor descriptor: CBDescriptor,
-                    error: Error?) {
-        let descUUIDStr = descriptor.uuid.uuidString.lowercased()
-        guard descUUIDStr == descriptorReadUUID else { return }
-        if let e = error {
-            descriptorReadLock.withLock { $0 = .failure(CBMError.from(e as NSError, fallbackDomain: "cb")) }
-        } else {
-            // CBDescriptor.value can be various types depending on descriptor type.
-            // We serialize to Data for a uniform binary representation.
-            let data: Data
-            if let d = descriptor.value as? Data {
-                data = d
-            } else if let n = descriptor.value as? NSNumber {
-                var v = n.uint16Value.littleEndian
-                data = Data(bytes: &v, count: 2)
-            } else if let s = descriptor.value as? String, let d = s.data(using: .utf8) {
-                data = d
-            } else {
-                data = Data()
-            }
-            descriptorReadLock.withLock { $0 = .success(data) }
+    func peripheral(_ p: CBPeripheral, didUpdateValueFor descriptor: CBDescriptor, error: Error?) {
+        guard descriptor.uuid.uuidString.lowercased() == descriptorReadUUID else { return }
+        let data: Data
+        switch descriptor.value {
+        case let d as Data:
+            data = d
+        case let n as NSNumber:
+            var v = n.uint16Value.littleEndian
+            data = Data(bytes: &v, count: 2)
+        case let s as String:
+            data = Data(s.utf8)
+        default:
+            data = Data()
+        }
+        descriptorReadLock.withLock {
+            $0 = error.map { .failure(CBMError.from($0 as NSError, fallbackDomain: "cb")) } ?? .success(data)
         }
         descriptorReadSem.signal()
     }
 
-    func peripheral(_ p: CBPeripheral,
-                    didWriteValueFor descriptor: CBDescriptor,
-                    error: Error?) {
-        let descUUIDStr = descriptor.uuid.uuidString.lowercased()
-        guard descUUIDStr == descriptorWriteUUID else { return }
-        if let e = error {
-            descriptorWriteLock.withLock { $0 = .failure(CBMError.from(e as NSError, fallbackDomain: "cb")) }
-        } else {
-            descriptorWriteLock.withLock { $0 = .success(()) }
+    func peripheral(_ p: CBPeripheral, didWriteValueFor descriptor: CBDescriptor, error: Error?) {
+        guard descriptor.uuid.uuidString.lowercased() == descriptorWriteUUID else { return }
+        descriptorWriteLock.withLock {
+            $0 = error.map { .failure(CBMError.from($0 as NSError, fallbackDomain: "cb")) } ?? .success(())
         }
         descriptorWriteSem.signal()
     }

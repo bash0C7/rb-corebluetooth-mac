@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# Codes mirror CBError.h enums (Swift `CBError.Code` / `CBATTError.Code`).
-# Verified against /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreBluetooth.framework/Versions/A/Headers/CBError.h.
-
 module CoreBluetoothMac
   module ErrorCodes
     CB = {
@@ -46,7 +43,7 @@ module CoreBluetoothMac
       0x11 => :insufficient_resources,
     }.freeze
 
-    def self.cb_name(code)  = CB[code]
+    def self.cb_name(code) = CB[code]
     def self.att_name(code) = ATT[code]
   end
 end

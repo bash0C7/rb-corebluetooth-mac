@@ -1,0 +1,279 @@
+module CoreBluetoothMac
+  # The gem version.
+  VERSION: String
+
+  BASE_UUID_SUFFIX: String
+
+  # Returns the lowercase 128-bit form of +uuid+, expanding 16-bit and 32-bit Bluetooth base UUIDs.
+  def self.uuid_key: (String uuid) -> String
+
+  # The only error class this gem raises. Rescue it and branch on #domain.
+  #
+  # Domains:
+  # - :timeout    the operation did not finish within its timeout
+  # - :closed     the Central is closed, the adapter is unusable (permission denied, off, unsupported, resetting),
+  #               or an operation other than connect and poll_events got a peripheral the Central has not scanned
+  # - :connection connecting failed, connect got a peripheral the Central has not scanned, or the peripheral is not connected
+  # - :discovery  the service, characteristic, or descriptor has not been discovered yet
+  # - :validation an argument has the wrong shape, or poll_events got an identifier the Central does not track
+  # - :cb         a CBError from CoreBluetooth; #code and #code_name are set
+  # - :att        a CBATTError from the remote peer; #code and #code_name are set
+  class Error < StandardError
+    # One of :timeout, :closed, :connection, :discovery, :validation, :cb, :att.
+    attr_reader domain: Symbol
+
+    # The CBError or CBATTError code for :cb and :att, otherwise nil.
+    attr_reader code: Integer?
+
+    # The symbolic name of #code, such as :read_not_permitted, or nil.
+    attr_reader code_name: Symbol?
+
+    def initialize: (String message, domain: Symbol, ?code: Integer?, ?code_name: Symbol?) -> void
+  end
+
+  # Code-to-name tables for CBError and CBATTError.
+  module ErrorCodes
+    CB: Hash[Integer, Symbol]
+    ATT: Hash[Integer, Symbol]
+
+    # Returns the name of a CBError code, or nil for an unknown code.
+    def self.cb_name: (Integer code) -> Symbol?
+
+    # Returns the name of a CBATTError code, or nil for an unknown code.
+    def self.att_name: (Integer code) -> Symbol?
+  end
+
+  # A BLE central backed by a CBCentralManager.
+  #
+  # Every blocking method releases the GVL. Interrupt, Thread#raise, and Thread#kill end the wait at once.
+  class Central
+    # Creates the manager and waits up to +state_timeout+ seconds for Bluetooth to power on.
+    # Raises Error with domain :closed when Bluetooth is off, unsupported, resetting, or not permitted, and :timeout when the state stays unknown.
+    def initialize: (?state_timeout: Float) -> void
+
+    # A process-unique positive id.
+    def central_id: () -> Integer
+
+    # Scans for +timeout+ seconds and returns one DiscoveredDevice per advertiser.
+    # +name+ keeps only advertisers with that name; +services+ keeps only advertisers of those service UUIDs.
+    def scan: (?name: String?, ?services: String | Array[String] | nil, ?timeout: Float) -> Array[DiscoveredDevice]
+
+    # Connects to a device from #scan and returns its Peripheral.
+    def connect: (DiscoveredDevice device, ?timeout: Float) -> Peripheral
+
+    # Starts disconnecting +peripheral+ and returns at once.
+    def disconnect: (Peripheral peripheral) -> nil
+
+    # Closes every subscription and detaches the manager. Calling close again does nothing.
+    # Afterwards every blocking operation, disconnect, and max_write_length raise Error with domain :closed,
+    # Peripheral#state returns :closed, Peripheral#last_disconnect_error returns nil, and #central_id keeps working.
+    def close: () -> nil
+
+    def __call_native: (Symbol op, *untyped args) -> untyped
+  end
+
+  # One advertiser found by Central#scan. Binary values are frozen ASCII-8BIT strings, so instances are Ractor-shareable.
+  class DiscoveredDevice < Data
+    # The peripheral's UUID string.
+    attr_reader identifier: String
+
+    # The peripheral's name, or the advertised local name.
+    attr_reader name: String?
+
+    # The signal strength in dBm.
+    attr_reader rssi: Integer
+
+    # The advertised transmit power in dBm.
+    attr_reader tx_power_level: Integer?
+
+    # Whether the advertiser accepts connections, or nil when not advertised.
+    attr_reader connectable: bool?
+
+    # Advertised service UUIDs, lowercase.
+    attr_reader service_uuids: Array[String]
+
+    # Service data keyed by lowercase service UUID.
+    attr_reader service_data: Hash[String, String]
+
+    # Manufacturer-specific data.
+    attr_reader manufacturer_data: String?
+
+    # Solicited service UUIDs, lowercase.
+    attr_reader solicited_service_uuids: Array[String]
+
+    # Overflow-area service UUIDs, lowercase.
+    attr_reader overflow_service_uuids: Array[String]
+
+    # The id of the Central that found the device.
+    attr_reader central_id: Integer
+
+    def initialize: (identifier: String, name: String?, rssi: Integer, tx_power_level: Integer?, connectable: bool?,
+                     service_uuids: Array[String], service_data: Hash[String, String], manufacturer_data: String?,
+                     solicited_service_uuids: Array[String], overflow_service_uuids: Array[String], central_id: Integer) -> void
+  end
+
+  # A connected peripheral.
+  class Peripheral
+    attr_reader identifier: String
+    attr_reader central: Central
+
+    def initialize: (central: Central, identifier: String) -> void
+
+    # One of :disconnected, :connecting, :connected, :disconnecting, :closed (Central closed), :unknown.
+    def state: () -> Symbol
+
+    # The error of the last disconnection, or nil after a clean disconnection.
+    def last_disconnect_error: () -> Error?
+
+    # Discovers services, optionally only those in +services+, and returns self.
+    # CoreBluetooth does not report the GAP (0x1800) and GATT (0x1801) services of some peripherals.
+    # With +services+, only the listed services are returned.
+    def discover_services: (?services: String | Array[String] | nil, ?timeout: Float) -> self
+
+    # The services from #discover_services. Raises Error with domain :discovery before it.
+    def services: () -> Array[Service]
+
+    # The discovered service with +uuid+. Case and the 16-bit, 32-bit, and 128-bit forms of a Bluetooth base UUID compare equal.
+    def find_service: (String uuid) -> Service?
+
+    # Reads the signal strength in dBm.
+    def read_rssi: (?timeout: Float) -> Integer
+
+    # The longest value one write can carry.
+    def max_write_length: (?response: bool) -> Integer
+
+    # Takes the oldest event, waiting up to +timeout+ seconds. Returns nil when none arrives.
+    # Raises Error with domain :closed after Central#close and :validation for a peripheral the Central does not track.
+    def poll_events: (?timeout: Float) -> (PeripheralEvent::NameUpdated | PeripheralEvent::ServicesInvalidated | PeripheralEvent::Disconnected)?
+
+    # The characteristic with +uuid+ among services whose characteristics are discovered, compared as in #find_service.
+    def find_characteristic: (String uuid) -> Characteristic?
+  end
+
+  # Events from Peripheral#poll_events.
+  module PeripheralEvent
+    # The peripheral changed its name.
+    class NameUpdated < Data
+      attr_reader name: String
+      def initialize: (name: String) -> void
+    end
+
+    # The peripheral invalidated these services; discover them again.
+    class ServicesInvalidated < Data
+      attr_reader uuids: Array[String]
+      def initialize: (uuids: Array[String]) -> void
+    end
+
+    # The peripheral disconnected; +error+ is nil for a clean disconnection.
+    class Disconnected < Data
+      attr_reader error: Error?
+      def initialize: (error: Error?) -> void
+    end
+  end
+
+  # A discovered GATT service.
+  class Service
+    attr_reader uuid: String
+    attr_reader peripheral: Peripheral
+
+    # Whether this is a primary service.
+    attr_reader is_primary: bool
+
+    # The UUIDs from the last #discover_included_services.
+    attr_reader included_service_uuids: Array[String]
+
+    def initialize: (peripheral: Peripheral, uuid: String, is_primary: bool) -> void
+
+    # Discovers the characteristics and returns self.
+    def discover_characteristics: (?timeout: Float) -> self
+
+    # Discovers and returns the included services.
+    def discover_included_services: (?timeout: Float) -> Array[Service]
+
+    # The characteristics from #discover_characteristics. Raises Error with domain :discovery before it.
+    def characteristics: () -> Array[Characteristic]
+
+    def characteristics_loaded?: () -> bool
+
+    # The characteristic with +uuid+, compared as in Peripheral#find_service.
+    def find_characteristic: (String uuid) -> Characteristic?
+  end
+
+  # A discovered GATT characteristic.
+  class Characteristic
+    attr_reader uuid: String
+    attr_reader service: Service
+
+    # The property symbols, such as :read, :write, :write_without_response, :notify, :indicate.
+    attr_reader properties: Set[Symbol]
+
+    # The value cached at discovery, or nil.
+    attr_reader initial_value: String?
+
+    def initialize: (service: Service, uuid: String, properties: Set[Symbol] | Array[Symbol], ?initial_value: String?) -> void
+
+    # Whether the characteristic has property +prop+.
+    def supports?: (Symbol prop) -> bool
+
+    # Reads the value as a mutable ASCII-8BIT string.
+    def read: (?timeout: Float) -> String
+
+    # Writes +data+. With +response+ false and a positive +timeout+, waits until the link can accept a write without response.
+    def write: (String data, ?response: bool, ?timeout: Float) -> nil
+
+    # Writes +data+ without response. +timeout+ 0 sends at once even when the link is saturated.
+    def write_without_response: (String data, ?timeout: Float) -> nil
+
+    # Turns notifications on and returns a Subscription that receives every later value.
+    def subscribe: () -> Subscription
+
+    # Turns notifications off and closes this characteristic's subscriptions.
+    def unsubscribe: () -> nil
+
+    # Discovers and returns the descriptors.
+    def discover_descriptors: (?timeout: Float) -> Array[Descriptor]
+
+    # The descriptors from #discover_descriptors. Raises Error with domain :discovery before it.
+    def descriptors: () -> Array[Descriptor]
+  end
+
+  # A discovered GATT descriptor.
+  class Descriptor
+    attr_reader uuid: String
+    attr_reader characteristic: Characteristic
+
+    # The last value read or written.
+    attr_reader value: String?
+
+    def initialize: (characteristic: Characteristic, uuid: String, ?value: String?) -> void
+
+    # Reads the value. Numbers come back as 2 little-endian bytes, strings as UTF-8 bytes.
+    def read: (?timeout: Float) -> String
+
+    # Writes +data+ and returns true.
+    def write: (String data, ?timeout: Float) -> true
+  end
+
+  # The notification queue of one subscribed characteristic. Ractor-shareable.
+  class Subscription < Data
+    attr_reader central_id: Integer
+    attr_reader subscription_id: Integer
+
+    def initialize: (central_id: Integer, subscription_id: Integer) -> void
+
+    # Takes the next value, waiting up to +timeout+ seconds.
+    # Returns the value, nil on timeout, or false once the subscription is closed and drained.
+    def next_value: (?timeout: Float) -> (String | false | nil)
+
+    # Closes the subscription and wakes a pending #next_value.
+    def close: () -> nil
+  end
+
+  def self.__hello: () -> String
+  def self.__subscription_next_value: (Integer central_id, Integer subscription_id, Integer timeout_ms) -> (String | :closed | nil)
+  def self.__subscription_close: (Integer central_id, Integer subscription_id) -> nil
+
+  class Native
+    def initialize: (Integer state_timeout_ms) -> void
+  end
+end

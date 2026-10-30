@@ -1,468 +1,183 @@
+import CoreBluetooth
 import Foundation
-@preconcurrency import CoreBluetooth
+import os
 
-// All Swift→C string returns are JSON envelopes:
-//   {"ok": true,  "data": <payload>}
-//   {"ok": false, "error": {"domain","code","code_name","message"}}
-// The C bridge parses the envelope and either returns `data` to Ruby or raises
-// CoreBluetoothMac::Error with structured kwargs.
-//
-// Functions whose natural return is binary data or an opaque pointer carry the
-// envelope via an out-parameter (`envelope_out`). All others return the
-// envelope directly as their CChar* return value.
-
-@c
-public func cbm_hello() -> UnsafeMutablePointer<CChar>? {
-    return strdup("hello from CoreBluetoothMac")
+/// A mutable reference that crosses `Sendable` boundaries under an external lock.
+final class Box<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
 }
 
-@c
-public func cbm_central_new(
-    _ stateTimeoutMs: Int32,
-    _ envelope_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-) -> UnsafeMutableRawPointer? {
-    envelope_out.pointee = nil
+/// An error returned to Ruby as the `error` member of an envelope.
+///
+/// `.lib` carries one of the domains `timeout`, `closed`, `connection`, `discovery`, `validation`.
+/// `.cb` and `.att` carry a code from `CBErrorDomain` and `CBATTErrorDomain`.
+enum CBMError: Error {
+    case lib(domain: String, message: String)
+    case cb(code: Int, codeName: String, message: String)
+    case att(code: Int, codeName: String, message: String)
 
-    let c = CBMCentral()
-    if let err = c.awaitPoweredOn(timeoutMs: stateTimeoutMs) {
-        envelope_out.pointee = strdup(CBMEnvelope.err(err))
-        return nil
-    }
-    envelope_out.pointee = strdup(CBMEnvelope.ok(nil))
-    return Unmanaged.passRetained(c).toOpaque()
-}
-
-@c
-public func cbm_central_free(_ ptr: UnsafeMutableRawPointer) {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeRetainedValue()
-    // `close()` is idempotent and handles purgeAll + delegate teardown.
-    // Calling it from the TypedData free path covers GC-only callers;
-    // explicit `Central#close` from Ruby still wins via the idempotency guard.
-    c.close()
-}
-
-@c
-public func cbm_central_close(_ ptr: UnsafeMutableRawPointer) {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    c.close()
-}
-
-@c
-public func cbm_central_id(_ ptr: UnsafeMutableRawPointer) -> Int64 {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    return c.centralId
-}
-
-@c
-public func cbm_central_scan(
-    _ ptr: UnsafeMutableRawPointer,
-    _ name_filter: UnsafePointer<CChar>?,
-    _ service_uuids_json: UnsafePointer<CChar>?,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Surface a closed-domain error to Ruby instead of an empty array.
-    if c.isClosed {
-        return strdup(CBMEnvelope.err(.lib(domain: "closed", message: "Central closed")))
-    }
-    let nameStr: String? = name_filter.map { String(cString: $0) }
-    var services: [CBUUID]? = nil
-    if let json = service_uuids_json {
-        let s = String(cString: json)
-        if let data = s.data(using: .utf8),
-           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            services = arr.map { CBUUID(string: $0) }
+    var json: [String: Any] {
+        switch self {
+        case .lib(let domain, let message):
+            ["domain": domain, "code": NSNull(), "code_name": NSNull(), "message": message]
+        case .cb(let code, let codeName, let message):
+            ["domain": "cb", "code": code, "code_name": codeName, "message": message]
+        case .att(let code, let codeName, let message):
+            ["domain": "att", "code": code, "code_name": codeName, "message": message]
         }
     }
-    let results = c.scan(name: nameStr, services: services, timeoutMs: timeout_ms)
-    return strdup(CBMEnvelope.ok(c.scanResultsAsArray(results)))
-}
 
-@c
-public func cbm_central_connect(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    let id = String(cString: identifier)
-    if let err = c.connect(identifier: id, timeoutMs: timeout_ms) {
-        return strdup(CBMEnvelope.err(err))
-    }
-    return strdup(CBMEnvelope.ok(nil))
-}
-
-@c
-public func cbm_central_disconnect(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    let id = String(cString: identifier)
-    if let err = c.disconnect(identifier: id) {
-        return strdup(CBMEnvelope.err(err))
-    }
-    return strdup(CBMEnvelope.ok(nil))
-}
-
-@c
-public func cbm_peripheral_state(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    return strdup(c.peripheralState(identifier: String(cString: identifier)))
-}
-
-@c
-public func cbm_peripheral_discover_services(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuids_json: UnsafePointer<CChar>?,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Same parsing pattern as `cbm_central_scan`: JSON array of UUID strings,
-    // nil = no filter (discover all services).
-    var services: [CBUUID]? = nil
-    if let json = service_uuids_json {
-        let s = String(cString: json)
-        if let data = s.data(using: .utf8),
-           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            services = arr.map { CBUUID(string: $0) }
+    /// Maps an `NSError` from CoreBluetooth to a ``CBMError``.
+    ///
+    /// - Parameters:
+    ///   - nsError: The error a CoreBluetooth callback delivered.
+    ///   - fallbackDomain: The `.lib` domain for errors outside `CBErrorDomain` and `CBATTErrorDomain`.
+    /// - Returns: `.cb` or `.att` with the code name, or `.lib` in `fallbackDomain`.
+    static func from(_ nsError: NSError, fallbackDomain: String = "discovery") -> CBMError {
+        let msg = nsError.localizedDescription
+        switch nsError.domain {
+        case CBErrorDomain:
+            return .cb(code: nsError.code, codeName: cbCodeName(nsError.code), message: msg)
+        case CBATTErrorDomain:
+            return .att(code: nsError.code, codeName: attCodeName(nsError.code), message: msg)
+        default:
+            return .lib(domain: fallbackDomain, message: msg.isEmpty ? "Unknown error" : msg)
         }
     }
-    switch c.discoverServices(
-        identifier: String(cString: identifier),
-        serviceUUIDs: services,
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let arr):
-        return strdup(CBMEnvelope.ok(arr))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
+
+    static let closed = CBMError.lib(domain: "closed", message: "Central closed")
+}
+
+private func cbCodeName(_ code: Int) -> String {
+    switch code {
+    case 1: "invalid_parameters"
+    case 2: "invalid_handle"
+    case 3: "not_connected"
+    case 4: "out_of_space"
+    case 5: "operation_cancelled"
+    case 6: "connection_timeout"
+    case 7: "peripheral_disconnected"
+    case 8: "uuid_not_allowed"
+    case 9: "already_advertising"
+    case 10: "connection_failed"
+    case 11: "connection_limit_reached"
+    case 12: "unknown_device"
+    case 13: "operation_not_supported"
+    case 14: "peer_removed_pairing_information"
+    case 15: "encryption_timed_out"
+    case 16: "too_many_le_paired_devices"
+    default: "unknown"
     }
 }
 
-@c
-public func cbm_characteristic_read(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32,
-    _ len_out: UnsafeMutablePointer<Int32>,
-    _ envelope_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-) -> UnsafeMutablePointer<UInt8>? {
-    envelope_out.pointee = nil
-    len_out.pointee = 0
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.readCharacteristic(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let data):
-        envelope_out.pointee = strdup(CBMEnvelope.ok(nil))
-        let n = data.count
-        len_out.pointee = Int32(n)
-        if n == 0 {
-            let buf = malloc(1)?.assumingMemoryBound(to: UInt8.self)
-            return buf
+private func attCodeName(_ code: Int) -> String {
+    switch code {
+    case 0x00: "success"
+    case 0x01: "invalid_handle"
+    case 0x02: "read_not_permitted"
+    case 0x03: "write_not_permitted"
+    case 0x04: "invalid_pdu"
+    case 0x05: "insufficient_authentication"
+    case 0x06: "request_not_supported"
+    case 0x07: "invalid_offset"
+    case 0x08: "insufficient_authorization"
+    case 0x09: "prepare_queue_full"
+    case 0x0A: "attribute_not_found"
+    case 0x0B: "attribute_not_long"
+    case 0x0C: "insufficient_encryption_key_size"
+    case 0x0D: "invalid_attribute_value_length"
+    case 0x0E: "unlikely_error"
+    case 0x0F: "insufficient_encryption"
+    case 0x10: "unsupported_group_type"
+    case 0x11: "insufficient_resources"
+    default: "unknown"
+    }
+}
+
+/// Serializes the JSON envelope every bridge function returns to C.
+///
+/// Success is `{"ok": true, "data": <payload>}` and failure is `{"ok": false, "error": {...}}` with the members of ``CBMError/json``.
+enum CBMEnvelope {
+    static func ok(_ data: Any?) -> String {
+        serialize(["ok": true, "data": data ?? NSNull()])
+    }
+
+    static func err(_ e: CBMError) -> String {
+        serialize(["ok": false, "error": e.json])
+    }
+
+    static func result(_ r: Result<some Any, CBMError>) -> String {
+        switch r {
+        case .success(let data): ok(data)
+        case .failure(let e): err(e)
         }
-        let buf = malloc(n)!.assumingMemoryBound(to: UInt8.self)
-        data.copyBytes(to: buf, count: n)
-        return buf
-    case .failure(let err):
-        envelope_out.pointee = strdup(CBMEnvelope.err(err))
-        return nil
+    }
+
+    static func status(_ e: CBMError?) -> String {
+        e.map(err) ?? ok(nil)
+    }
+
+    private static func serialize(_ env: [String: Any]) -> String {
+        String(decoding: try! JSONSerialization.data(withJSONObject: env), as: UTF8.self)
     }
 }
 
-@c
-public func cbm_characteristic_write(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ data: UnsafePointer<UInt8>,
-    _ data_len: Int32,
-    _ with_response: Int32,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    let bytes = UnsafeBufferPointer(start: data, count: Int(data_len))
-    let payload = Data(buffer: bytes)
-    if let err = c.writeCharacteristic(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        data: payload,
-        withResponse: with_response != 0,
-        timeoutMs: timeout_ms
-    ) {
-        return strdup(CBMEnvelope.err(err))
-    }
-    return strdup(CBMEnvelope.ok(nil))
-}
-
-@c
-public func cbm_service_discover_characteristics(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.discoverCharacteristics(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let arr):
-        return strdup(CBMEnvelope.ok(arr))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_service_discover_included_services(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.discoverIncludedServices(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let arr):
-        return strdup(CBMEnvelope.ok(arr))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_peripheral_read_rssi(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.readRSSI(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
-    case .success(let rssi):
-        return strdup(CBMEnvelope.ok(NSNumber(value: rssi)))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_peripheral_last_disconnect_error(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    let nsErr = c.lastDisconnectError(identifier: String(cString: identifier))
-    if let e = nsErr {
-        let cbmErr = CBMError.from(e, fallbackDomain: "connection")
-        return strdup(CBMEnvelope.ok(cbmErr.json))
-    }
-    return strdup(CBMEnvelope.ok(nil))
-}
-
-@c
-public func cbm_peripheral_poll_events(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    // Closed / unknown-identifier are distinct errors;
-    // success(nil) is timeout; success(some) is an event.
-    switch c.pollPeripheralEvents(identifier: String(cString: identifier), timeoutMs: timeout_ms) {
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    case .success(nil):
-        return strdup(CBMEnvelope.ok(nil))
-    case .success(.some(let ev)):
-        let data: [String: Any] = ["tag": ev.tag, "payload": ev.payload]
-        return strdup(CBMEnvelope.ok(data))
-    }
-}
-
-@c
-public func cbm_peripheral_max_write_length(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ with_response: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.maxWriteLength(identifier: String(cString: identifier), withResponse: with_response != 0) {
-    case .success(let n):
-        return strdup(CBMEnvelope.ok(NSNumber(value: n)))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_characteristic_subscribe(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.subscribeCharacteristic(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let id): return strdup(CBMEnvelope.ok(NSNumber(value: id)))
-    case .failure(let err): return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_characteristic_unsubscribe(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    if let err = c.unsubscribeCharacteristic(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        timeoutMs: timeout_ms
-    ) {
-        return strdup(CBMEnvelope.err(err))
-    }
-    return strdup(CBMEnvelope.ok(nil))
-}
-
-@c
-public func cbm_subscription_next_value(
-    _ subscription_id: Int64,
-    _ timeout_ms: Int32,
-    _ closed_out: UnsafeMutablePointer<Int32>,
-    _ len_out: UnsafeMutablePointer<Int32>
-) -> UnsafeMutablePointer<UInt8>? {
-    closed_out.pointee = 0
-    len_out.pointee = 0
-    let (data, closed) = CBMSubscriptionRegistry.shared.dequeue(
-        subscriptionId: subscription_id, timeoutMs: timeout_ms
+/// A cancellation token for one blocking call from Ruby.
+///
+/// ``cancel()`` makes the wait in progress, and every later wait, end as `.timedOut`.
+final class CBMCancel: Sendable {
+    private let state = OSAllocatedUnfairLock<(cancelled: Bool, waiting: DispatchSemaphore?)>(
+        initialState: (false, nil)
     )
-    if closed { closed_out.pointee = 1 }
-    guard let d = data else { return nil }
-    let n = d.count
-    len_out.pointee = Int32(n)
-    if n == 0 {
-        return malloc(1)?.assumingMemoryBound(to: UInt8.self)
-    }
-    let buf = malloc(n)!.assumingMemoryBound(to: UInt8.self)
-    d.copyBytes(to: buf, count: n)
-    return buf
-}
 
-@c
-public func cbm_subscription_close(_ subscription_id: Int64) {
-    CBMSubscriptionRegistry.shared.close(subscriptionId: subscription_id)
-}
-
-@c
-public func cbm_characteristic_discover_descriptors(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.discoverDescriptors(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let arr):
-        return strdup(CBMEnvelope.ok(arr))
-    case .failure(let err):
-        return strdup(CBMEnvelope.err(err))
-    }
-}
-
-@c
-public func cbm_descriptor_read(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ desc_uuid: UnsafePointer<CChar>,
-    _ timeout_ms: Int32,
-    _ len_out: UnsafeMutablePointer<Int32>,
-    _ envelope_out: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-) -> UnsafeMutablePointer<UInt8>? {
-    envelope_out.pointee = nil
-    len_out.pointee = 0
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    switch c.readDescriptor(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        descUUID: String(cString: desc_uuid),
-        timeoutMs: timeout_ms
-    ) {
-    case .success(let data):
-        envelope_out.pointee = strdup(CBMEnvelope.ok(nil))
-        let n = data.count
-        len_out.pointee = Int32(n)
-        if n == 0 {
-            let buf = malloc(1)?.assumingMemoryBound(to: UInt8.self)
-            return buf
+    /// Ends the current and all later ``wait(_:until:)`` calls. Only the first call signals the waited semaphore.
+    func cancel() {
+        let waiting = state.withLock { s -> DispatchSemaphore? in
+            if s.cancelled { return nil }
+            s.cancelled = true
+            return s.waiting
         }
-        let buf = malloc(n)!.assumingMemoryBound(to: UInt8.self)
-        data.copyBytes(to: buf, count: n)
-        return buf
-    case .failure(let err):
-        envelope_out.pointee = strdup(CBMEnvelope.err(err))
-        return nil
+        waiting?.signal()
+    }
+
+    /// Waits on `semaphore` until `deadline` or until ``cancel()``.
+    ///
+    /// - Parameters:
+    ///   - semaphore: The semaphore a CoreBluetooth callback signals.
+    ///   - deadline: The time at which the wait times out.
+    /// - Returns: `.success` when `semaphore` was signaled, `.timedOut` on the deadline or after ``cancel()``.
+    func wait(_ semaphore: DispatchSemaphore, until deadline: DispatchTime) -> DispatchTimeoutResult {
+        let cancelled = state.withLock { s in
+            s.waiting = semaphore
+            return s.cancelled
+        }
+        let result = cancelled ? .timedOut : semaphore.wait(timeout: deadline)
+        return state.withLock { s in
+            s.waiting = nil
+            return s.cancelled ? .timedOut : result
+        }
+    }
+
+    /// Waits until `deadline` or until ``cancel()``.
+    ///
+    /// - Parameter deadline: The time at which the wait ends.
+    func sleep(until deadline: DispatchTime) {
+        _ = wait(DispatchSemaphore(value: 0), until: deadline)
     }
 }
 
-@c
-public func cbm_descriptor_write(
-    _ ptr: UnsafeMutableRawPointer,
-    _ identifier: UnsafePointer<CChar>,
-    _ service_uuid: UnsafePointer<CChar>,
-    _ char_uuid: UnsafePointer<CChar>,
-    _ desc_uuid: UnsafePointer<CChar>,
-    _ data: UnsafePointer<UInt8>,
-    _ data_len: Int32,
-    _ timeout_ms: Int32
-) -> UnsafeMutablePointer<CChar>? {
-    let c = Unmanaged<CBMCentral>.fromOpaque(ptr).takeUnretainedValue()
-    let bytes = UnsafeBufferPointer(start: data, count: Int(data_len))
-    let payload = Data(buffer: bytes)
-    if let err = c.writeDescriptor(
-        identifier: String(cString: identifier),
-        serviceUUID: String(cString: service_uuid),
-        charUUID: String(cString: char_uuid),
-        descUUID: String(cString: desc_uuid),
-        data: payload,
-        timeoutMs: timeout_ms
-    ) {
-        return strdup(CBMEnvelope.err(err))
+extension DispatchSemaphore {
+    /// Consumes every pending signal, such as one from a callback that arrived after an earlier wait timed out.
+    func drain() {
+        while wait(timeout: .now()) == .success {}
     }
-    return strdup(CBMEnvelope.ok(nil))
+}
+
+/// Returns the deadline `timeoutMs` milliseconds from now.
+///
+/// - Parameter timeoutMs: The timeout in milliseconds.
+/// - Returns: The deadline for ``CBMCancel/wait(_:until:)``.
+func deadline(_ timeoutMs: Int32) -> DispatchTime {
+    .now() + .milliseconds(Int(timeoutMs))
 }

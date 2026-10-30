@@ -5,13 +5,13 @@ module CoreBluetoothMac
     :identifier,
     :name,
     :rssi,
-    :tx_power_level,         # Integer (dBm) or nil
-    :connectable,            # true | false | nil (key absent)
-    :service_uuids,          # [String] lowercase UUID, default []
-    :service_data,           # { String => String (binary, ASCII-8BIT) }, default {}
-    :manufacturer_data,      # String (binary, ASCII-8BIT) or nil
-    :solicited_service_uuids, # [String], default []
-    :overflow_service_uuids,  # [String], default []
+    :tx_power_level,
+    :connectable,
+    :service_uuids,
+    :service_data,
+    :manufacturer_data,
+    :solicited_service_uuids,
+    :overflow_service_uuids,
     :central_id,
   )
 end

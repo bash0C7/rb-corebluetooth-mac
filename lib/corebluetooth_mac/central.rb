@@ -11,12 +11,8 @@ module CoreBluetoothMac
     end
 
     def scan(name: nil, services: nil, timeout: 5.0)
-      # Empty `services: []` would serialize as "[]" and CoreBluetooth treats
-      # an empty service-filter array as "match nothing", silently returning
-      # zero peripherals. Normalize empty/nil to nil so Swift skips the filter.
       arr = services ? Array(services) : []
       services_json = arr.empty? ? nil : JSON.dump(arr)
-      # C bridge parses the JSON envelope and returns the unwrapped data array.
       raw = @native.scan(name, services_json, (timeout * 1000).to_i)
       raw.map do |h|
         DiscoveredDevice.new(
@@ -46,9 +42,6 @@ module CoreBluetoothMac
     end
 
     def close
-      # Native `close` is idempotent (guarded by a `closedFlag` lock), so
-      # no Ruby-side state is needed. Operations after `close` raise
-      # `Error(domain: :closed)` via the native gate.
       @native.close
       nil
     end
@@ -60,40 +53,30 @@ module CoreBluetoothMac
       when :peripheral_last_disconnect_error
         @native.peripheral_last_disconnect_error(*args)
       when :peripheral_poll_events
-        # args: (identifier, timeout_ms). Returns nil on timeout, or
-        # `{"tag"=>..., "payload"=>...}` (envelope data field). Closed Central /
-        # unknown peripheral surface as envelope errors → Error(:closed|:validation).
         @native.peripheral_poll_events(*args)
       when :peripheral_read_rssi
         @native.peripheral_read_rssi(*args)
       when :peripheral_max_write_length
         @native.peripheral_max_write_length(*args)
       when :peripheral_discover_services
-        # args: (identifier, services_filter_json_or_nil, timeout_ms)
-        # C bridge returns the already-parsed array of `{uuid, is_primary}` hashes.
         @native.discover_services(*args)
       when :service_discover_characteristics
-        # C bridge returns the already-parsed array of characteristic hashes.
         @native.discover_characteristics(*args)
       when :service_discover_included_services
-        # C bridge returns the already-parsed array of {uuid, is_primary} hashes.
         @native.discover_included_services(*args)
       when :characteristic_read
         @native.characteristic_read(*args)
       when :characteristic_write
         @native.characteristic_write(*args)
       when :characteristic_subscribe
-        @native.characteristic_subscribe(args[0], args[1], args[2], 5000)  # 5s default subscribe timeout
+        @native.characteristic_subscribe(*args, 5000)
       when :characteristic_unsubscribe
-        @native.characteristic_unsubscribe(args[0], args[1], args[2], 5000)
+        @native.characteristic_unsubscribe(*args, 5000)
       when :characteristic_discover_descriptors
-        # args: (identifier, service_uuid, char_uuid, timeout_ms)
         @native.characteristic_discover_descriptors(*args)
       when :descriptor_read
-        # args: (identifier, service_uuid, char_uuid, desc_uuid, timeout_ms)
         @native.descriptor_read(*args)
       when :descriptor_write
-        # args: (identifier, service_uuid, char_uuid, desc_uuid, data, timeout_ms)
         @native.descriptor_write(*args)
       else
         raise ArgumentError, "unknown native op: #{op}"
@@ -102,11 +85,6 @@ module CoreBluetoothMac
 
     private
 
-    # Decode a hex string (e.g. "0a1b2c") into a binary ASCII-8BIT String.
-    # Returns nil for nil input. Used for `manufacturer_data` and each value
-    # of `service_data` (which arrive from Swift as lowercase hex).
-    # The result is frozen so DiscoveredDevice instances stay Ractor.shareable
-    # when populated with non-empty ad-data.
     def unhex(h)
       return nil if h.nil?
       [h].pack("H*").force_encoding(Encoding::ASCII_8BIT).freeze
@@ -114,9 +92,7 @@ module CoreBluetoothMac
 
     def build_service_data(raw)
       return {}.freeze if raw.nil? || raw.empty?
-      out = {}
-      raw.each { |uuid, hex| out[uuid] = unhex(hex) }
-      out.freeze
+      raw.transform_values { |hex| unhex(hex) }.freeze
     end
   end
 end

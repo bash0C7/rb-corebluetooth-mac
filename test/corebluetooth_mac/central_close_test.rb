@@ -2,12 +2,6 @@
 
 require "test_helper"
 
-# Central#close real teardown semantics.
-#
-# These tests instantiate a real CBCentralManager (the close path lives in the
-# native bridge), so they ride BLE_HW=1 — without the adapter present
-# `Central.new` would itself fail. The tests are not "hardware peripheral"
-# dependent; they only need the local adapter.
 class TestCentralClose < Test::Unit::TestCase
   def setup
     HardwareGuard.skip_unless_hardware!(self)
@@ -28,8 +22,6 @@ class TestCentralClose < Test::Unit::TestCase
     assert_equal :closed, err.domain
   end
 
-  # Unknown identifier on poll_events must raise a validation error so callers
-  # can distinguish "no event yet" (timeout) from "wrong identifier".
   def test_poll_events_unknown_identifier_raises
     central = CoreBluetoothMac::Central.new(state_timeout: 5.0)
     fake = CoreBluetoothMac::Peripheral.new(
