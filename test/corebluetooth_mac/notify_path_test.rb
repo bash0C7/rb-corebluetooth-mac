@@ -3,16 +3,13 @@
 require "test_helper"
 
 class NotifyPathTest < Test::Unit::TestCase
-  PREFIX = "swiftgem-test-"
-
   def setup
     HardwareGuard.skip_unless_hardware!(self)
-    unless ENV["BLE_TARGET_NAME"]&.start_with?(PREFIX)
-      omit "Set BLE_TARGET_NAME to the name test/support/virtual_peripheral.swift prints (#{PREFIX}...)"
-    end
+    service_uuid = ENV["BLE_TARGET_SERVICE"]
+    omit "Set BLE_TARGET_SERVICE to the service UUID test/support/virtual_peripheral.swift prints" if service_uuid.nil? || service_uuid.empty?
     @central = CoreBluetoothMac::Central.new(state_timeout: 5.0)
-    device = HardwareGuard.target(self, @central)
-    service_uuid = device.service_uuids.first
+    device = @central.scan(services: service_uuid, timeout: 8.0).max_by(&:rssi)
+    omit "no peripheral advertising service #{service_uuid}" unless device
     @peripheral = @central.connect(device, timeout: 5.0)
     @peripheral.discover_services(services: service_uuid, timeout: 5.0)
     service = @peripheral.find_service(service_uuid).discover_characteristics
@@ -70,8 +67,8 @@ class NotifyPathTest < Test::Unit::TestCase
   def test_calls_after_disconnect_raise_connection_errors
     @central.disconnect(@peripheral)
     deadline = now + 5.0
-    sleep 0.05 until @peripheral.state == "disconnected" || now > deadline
-    assert_equal "disconnected", @peripheral.state
+    sleep 0.05 until @peripheral.state == :disconnected || now > deadline
+    assert_equal :disconnected, @peripheral.state
     [-> { @rw.read }, -> { @rw.write("x") }, -> { @notify.subscribe }, -> { @notify.unsubscribe }].each do |call|
       assert_equal :connection, assert_raise(CoreBluetoothMac::Error, &call).domain
     end

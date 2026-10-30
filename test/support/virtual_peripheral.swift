@@ -74,7 +74,7 @@ final class VirtualPeripheral: NSObject, CBPeripheralManagerDelegate, @unchecked
             emit("error advertise \(error.localizedDescription)")
             exit(5)
         }
-        emit("advertising \(name)")
+        emit("advertising \(serviceUUID.uuidString)")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
@@ -147,7 +147,7 @@ final class VirtualPeripheral: NSObject, CBPeripheralManagerDelegate, @unchecked
     }
 }
 
-guard CBManager.authorization == .allowedAlways else {
+guard CBManager.authorization != .denied, CBManager.authorization != .restricted else {
     emit("error authorization \(CBManager.authorization.rawValue)")
     exit(2)
 }
