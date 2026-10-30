@@ -239,7 +239,7 @@ BLE_HW=1 BLE_TARGET_NAME=YourDeviceName bundle exec rake test
 
 ### Virtual peripheral
 
-`test/support/virtual_peripheral.swift` advertises a peripheral named `swiftgem-test-` followed by six random characters, with a random 128-bit service that holds a notify characteristic and a read/write characteristic. While subscribed, it notifies `a5 5a` followed by a big-endian 32-bit counter every 100 ms, starting at 0 on each subscription. A read returns the last written bytes. It prints `advertising <name>` once advertising starts, and stops advertising and exits when its stdin closes or on SIGINT or SIGTERM.
+`test/support/virtual_peripheral.swift` advertises a random 128-bit service that holds a notify characteristic and a read/write characteristic. While subscribed, it notifies `a5 5a` followed by a big-endian 32-bit counter every 100 ms, starting at 0 on each subscription. A read returns the last written bytes. It prints `advertising <service uuid>` once advertising starts, and stops advertising and exits when its stdin closes or on SIGINT or SIGTERM.
 
 A Mac's central does not see the same Mac's advertising, so run the script on a second Mac with Bluetooth permitted for its terminal:
 
@@ -247,13 +247,13 @@ A Mac's central does not see the same Mac's advertising, so run the script on a 
 xcrun swift test/support/virtual_peripheral.swift
 ```
 
-Then, on the Mac under test, pass the printed name:
+Then, on the Mac under test, pass the printed service UUID:
 
 ```bash
-BLE_HW=1 BLE_TARGET_NAME=swiftgem-test-xxxxxx bundle exec rake test
+BLE_HW=1 BLE_TARGET_SERVICE=<service uuid> bundle exec rake test
 ```
 
-`notify_path_test` runs only when `BLE_TARGET_NAME` starts with `swiftgem-test-`.
+`notify_path_test` runs only when `BLE_TARGET_SERVICE` is set, and connects only to the advertiser of that service.
 
 ## License
 
