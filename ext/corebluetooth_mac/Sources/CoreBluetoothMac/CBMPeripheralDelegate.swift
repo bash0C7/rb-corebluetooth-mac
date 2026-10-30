@@ -20,6 +20,7 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
     static let eventQueueLimit = 256
 
     let peripheral: CBPeripheral
+    let centralId: Int64
 
     let connectSem = DispatchSemaphore(value: 0)
     var connectError: Error? = nil
@@ -94,8 +95,9 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
         return event.map { ($0.value.0.rawValue, $0.value.1) }
     }
 
-    init(peripheral: CBPeripheral) {
+    init(peripheral: CBPeripheral, centralId: Int64) {
         self.peripheral = peripheral
+        self.centralId = centralId
         super.init()
         peripheral.delegate = self
     }
@@ -134,7 +136,12 @@ final class CBMPeripheralDelegate: NSObject, CBPeripheralDelegate, @unchecked Se
             readSem.signal()
             return
         }
-        CBMSubscriptionRegistry.shared.enqueue(characteristic: characteristic)
+        CBMSubscriptionRegistry.shared.enqueue(
+            characteristic.value ?? Data(),
+            centralId: centralId,
+            peripheral: p.identifier,
+            characteristicUUID: characteristic.uuid
+        )
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

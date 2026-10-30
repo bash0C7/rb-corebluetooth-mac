@@ -11,6 +11,11 @@ end
 
 task compile: :swift
 
+desc "Run the Swift package tests"
+task :swift_test do
+  sh "xcrun", "swift", "test", "--package-path", "ext/corebluetooth_mac"
+end
+
 Rake::ExtensionTask.new("corebluetooth_mac") do |ext|
   ext.lib_dir = "lib/corebluetooth_mac"
 end
@@ -35,5 +40,5 @@ task console: :compile do
   IRB.start
 end
 
-task test: %i[rbs compile]
+task test: %i[rbs compile swift_test]
 task default: :test
