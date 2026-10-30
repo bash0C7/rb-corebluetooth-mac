@@ -25,7 +25,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
             return state
         }
         if already { return }
-        CBMSubscriptionRegistry.shared.purgeAll(under: self)
+        CBMSubscriptionRegistry.shared.purgeAll(centralId: centralId)
         queue.sync {
             let snapshot = delegatesLock.withLock { Array($0.values) }
             for d in snapshot {
@@ -175,7 +175,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
               let peripheral = knownPeripherals.withLock({ $0[uuid] }) else { return nil }
         let d = delegatesLock.withLock { dict in
             if let existing = dict[uuid] { return existing }
-            let nd = CBMPeripheralDelegate(peripheral: peripheral)
+            let nd = CBMPeripheralDelegate(peripheral: peripheral, centralId: centralId)
             dict[uuid] = nd
             return nd
         }
@@ -422,6 +422,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
 
         let errorPayload: Any = error.map { CBMError.from($0 as NSError, fallbackDomain: "connection").json } ?? NSNull()
         d.pushEvent(tag: .disconnected, payload: ["error": errorPayload])
+        CBMSubscriptionRegistry.shared.disconnected(centralId: centralId, peripheral: p.identifier)
     }
 
     func readRSSI(identifier: String, timeoutMs: Int32, cancel: CBMCancel) -> Result<Int, CBMError> {
@@ -562,18 +563,25 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         guard let ch = findCharacteristic(p, serviceUUID: serviceUUID, charUUID: charUUID) else {
             return .failure(.lib(domain: "discovery", message: "Service/characteristic not discovered"))
         }
+        let id = CBMSubscriptionRegistry.shared.register(centralId: centralId, peripheral: p.identifier, characteristicUUID: ch.uuid)
         d.notifyCharUUID = ch.uuid
         d.notifyError = nil
         d.notifySem.drain()
         p.setNotifyValue(true, for: ch)
         let r = cancel.wait(d.notifySem, until: deadline(timeoutMs))
         d.notifyCharUUID = nil
-        if r == .timedOut { return .failure(.lib(domain: "timeout", message: "subscribe timed out")) }
-        if let e = d.notifyError { return .failure(CBMError.from(e as NSError, fallbackDomain: "connection")) }
-        return .success(CBMSubscriptionRegistry.shared.register(central: self, characteristicUUID: ch.uuid))
+        if r == .timedOut {
+            CBMSubscriptionRegistry.shared.remove(subscriptionId: id)
+            return .failure(.lib(domain: "timeout", message: "subscribe timed out"))
+        }
+        if let e = d.notifyError {
+            CBMSubscriptionRegistry.shared.remove(subscriptionId: id)
+            return .failure(CBMError.from(e as NSError, fallbackDomain: "connection"))
+        }
+        return .success(id)
     }
 
-    /// Turns notifications off and closes only the subscriptions on this central for `charUUID`.
+    /// Turns notifications off and closes only the subscriptions on this central for the peripheral's `charUUID`.
     func unsubscribeCharacteristic(identifier: String, serviceUUID: String, charUUID: String,
                                    timeoutMs: Int32, cancel: CBMCancel) -> CBMError? {
         if isClosed { return .closed }
@@ -590,7 +598,7 @@ final class CBMCentral: NSObject, CBCentralManagerDelegate, @unchecked Sendable 
         d.notifyCharUUID = nil
         if r == .timedOut { return .lib(domain: "timeout", message: "unsubscribe timed out") }
         if let e = d.notifyError { return CBMError.from(e as NSError, fallbackDomain: "connection") }
-        CBMSubscriptionRegistry.shared.purgeMatching(under: self, characteristicUUID: ch.uuid)
+        CBMSubscriptionRegistry.shared.purgeMatching(centralId: centralId, peripheral: p.identifier, characteristicUUID: ch.uuid)
         return nil
     }
 }

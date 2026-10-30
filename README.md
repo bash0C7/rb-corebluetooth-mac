@@ -235,7 +235,25 @@ bundle exec rake test
 BLE_HW=1 BLE_TARGET_NAME=YourDeviceName bundle exec rake test
 ```
 
-`rake test` validates `sig/corebluetooth_mac.rbs`, runs `xcrun swift build -c release --package-path ext/corebluetooth_mac`, builds the C extension into `lib/corebluetooth_mac/corebluetooth_mac.bundle`, then runs the tests. The interrupt test scans for a moment and is omitted when the Bluetooth adapter is unavailable. The other tests that use the adapter run only with `BLE_HW=1`. Of those, the tests that connect to any peripheral use only the one whose advertised name equals or starts with `BLE_TARGET_NAME` and are omitted without it; the tests for a CoreS3 advertising `StackChan-PicoRuby` are omitted when it is not nearby.
+`rake test` validates `sig/corebluetooth_mac.rbs`, runs `xcrun swift build -c release --package-path ext/corebluetooth_mac`, builds the C extension into `lib/corebluetooth_mac/corebluetooth_mac.bundle`, runs the Swift package tests (`xcrun swift test --package-path ext/corebluetooth_mac`), then runs the Ruby tests. The interrupt test scans for a moment and is omitted when the Bluetooth adapter is unavailable. The other tests that use the adapter run only with `BLE_HW=1`. Of those, the tests that connect to any peripheral use only the one whose advertised name equals or starts with `BLE_TARGET_NAME` and are omitted without it; the tests for a CoreS3 advertising `StackChan-PicoRuby` are omitted when it is not nearby.
+
+### Virtual peripheral
+
+`test/support/virtual_peripheral.swift` advertises a peripheral named `swiftgem-test-` followed by six random characters, with a random 128-bit service that holds a notify characteristic and a read/write characteristic. While subscribed, it notifies `a5 5a` followed by a big-endian 32-bit counter every 100 ms, starting at 0 on each subscription. A read returns the last written bytes. It prints `advertising <name>` once advertising starts, and stops advertising and exits when its stdin closes or on SIGINT or SIGTERM.
+
+A Mac's central does not see the same Mac's advertising, so run the script on a second Mac with Bluetooth permitted for its terminal:
+
+```bash
+xcrun swift test/support/virtual_peripheral.swift
+```
+
+Then, on the Mac under test, pass the printed name:
+
+```bash
+BLE_HW=1 BLE_TARGET_NAME=swiftgem-test-xxxxxx bundle exec rake test
+```
+
+`notify_path_test` runs only when `BLE_TARGET_NAME` starts with `swiftgem-test-`.
 
 ## License
 

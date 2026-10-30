@@ -14,6 +14,7 @@ Ruby C extension wrapping Apple CoreBluetooth (BLE central) via Swift, built on 
 - `ext/corebluetooth_mac/corebluetooth_mac.c` — C bridge. Unwraps JSON envelopes from Swift and raises `CoreBluetoothMac::Error` on `ok: false`.
 - `ext/corebluetooth_mac/Sources/CoreBluetoothMac/CoreBluetoothMacBridge.swift` — `@c(corebluetooth_mac_*)` exports. Every buffer they return is released with `corebluetooth_mac_free`.
 - `ext/corebluetooth_mac/Sources/CoreBluetoothMac/*.swift` — Swift wrappers (`CBMCentral`, `CBMPeripheralDelegate`, `CBMSubscriptionRegistry`) and shared types (`CBMError`, `CBMEnvelope`, `CBMCancel`).
+- `ext/corebluetooth_mac/Tests/CoreBluetoothMacTests/*.swift` — Swift Testing tests (`@testable import CoreBluetoothMac`) for logic that runs without CoreBluetooth objects, such as `CBMSubscriptionRegistry`, which keys each subscription by central id, peripheral identifier, and characteristic UUID.
 - `ext/corebluetooth_mac/swift_mkmf.rb` — vendored copy of swift_gem's `lib/swift_gem/mkmf.rb`; keep it identical.
 
 ## Wire protocol
@@ -65,14 +66,15 @@ end
 ```bash
 bundle exec rake compile                  # xcrun swift build, then the C extension
 bundle exec rake clobber compile          # after a Swift bridge signature change without a .c change
-bundle exec rake test                     # rbs validate, compile, tests without Bluetooth hardware
+bundle exec rake swift_test               # xcrun swift test (Swift Testing, no Bluetooth)
+bundle exec rake test                     # rbs validate, compile, swift_test, tests without Bluetooth hardware
 BLE_HW=1 bundle exec rake test            # also run the tests that use the Bluetooth adapter
 bundle exec rake console                  # IRB with the gem loaded
 ```
 
 `xcrun swift build` writes `CoreBluetoothMac-Swift.h` under `ext/corebluetooth_mac/.build/out/Intermediates.noindex/GeneratedModuleMaps/`. The extension Makefile does not track that header, so a changed `@c` signature reaches the C side only after `rake clobber compile` or an edit to `corebluetooth_mac.c`.
 
-`interrupt_test` needs only a usable adapter (`Central.new` reaching poweredOn) and runs in the plain `rake test`; it scans and never connects. `BLE_HW=1` tests need Bluetooth on and permitted. The tests that connect to an arbitrary peripheral (`disconnect_error_test`, `discover_descriptors_test`, `discover_included_services_test`, `discover_services_filter_test`, `max_write_length_test`, `peripheral_events_test`) connect only to the peripheral whose advertised name equals or starts with `BLE_TARGET_NAME`, and omit themselves without it; the StackChan tests (`scan_test`, `connect_test`, `discover_test`, `read_gap_device_name_test`, `read_rssi_test`, `subscribe_test`, `subscribe_ractor_test`, `write_test`) omit themselves unless a CoreS3 advertising `StackChan-PicoRuby` with the Nordic UART service is nearby.
+`interrupt_test` needs only a usable adapter (`Central.new` reaching poweredOn) and runs in the plain `rake test`; it scans and never connects. `BLE_HW=1` tests need Bluetooth on and permitted. The tests that connect to an arbitrary peripheral (`disconnect_error_test`, `discover_descriptors_test`, `discover_included_services_test`, `discover_services_filter_test`, `max_write_length_test`, `peripheral_events_test`) connect only to the peripheral whose advertised name equals or starts with `BLE_TARGET_NAME`, and omit themselves without it; `notify_path_test` reads, writes, and subscribes, so it runs only when `BLE_TARGET_NAME` starts with `swiftgem-test-`, the name `test/support/virtual_peripheral.swift` advertises (run it on a second Mac; a Mac's central does not see its own advertising); the StackChan tests (`scan_test`, `connect_test`, `discover_test`, `read_gap_device_name_test`, `read_rssi_test`, `subscribe_test`, `subscribe_ractor_test`, `write_test`) omit themselves unless a CoreS3 advertising `StackChan-PicoRuby` with the Nordic UART service is nearby.
 
 `rake test` should be delegated to a subagent to avoid polluting the main context with build logs and Test::Unit progress. Single-test debugging (`-n test_specific`) can be Bash-direct.
 

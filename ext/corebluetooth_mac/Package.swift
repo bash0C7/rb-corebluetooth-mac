@@ -16,5 +16,9 @@ let package = Package(
         .target(
             name: "CoreBluetoothMac"
         ),
+        .testTarget(
+            name: "CoreBluetoothMacTests",
+            dependencies: ["CoreBluetoothMac"]
+        ),
     ]
 )
